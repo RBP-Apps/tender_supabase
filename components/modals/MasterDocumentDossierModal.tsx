@@ -31,8 +31,16 @@ import {
   Plus,
   Save,
   FileEdit,
+  Loader2,
+  RefreshCw,
 } from 'lucide-react'
-import { Tender, SampleDocumentItem, EligibilityDocument } from '@/types/tender'
+import {
+  Tender,
+  SampleDocumentItem,
+  EligibilityDocument,
+  PortalUploadDocumentItem,
+  PortalChecklistItem,
+} from '@/types/tender'
 import {
   collectAllTenderDocuments,
   CollectedDocument,
@@ -43,6 +51,7 @@ import {
 } from '@/lib/document-ready-collector'
 import { WordLetterEditorModal } from './WordLetterEditorModal'
 import { dataUrlToBlobUrl } from '@/lib/utils'
+import { extractPortalChecklist, isOldFallbackChecklist } from '@/lib/portal-checklist-extractor'
 
 interface MasterDocumentDossierModalProps {
   tender: Tender
@@ -58,9 +67,127 @@ export function MasterDocumentDossierModal({
   onUpdate,
 }: MasterDocumentDossierModalProps) {
   const dossier = useMemo(() => collectAllTenderDocuments(tender), [tender])
-  const [activeCategory, setActiveCategory] = useState<DocumentCategory | 'all'>('all')
+  const [activeCategory, setActiveCategory] = useState<DocumentCategory | 'all'>('portal-checklist')
   const [copiedUtr, setCopiedUtr] = useState(false)
   const [previewDoc, setPreviewDoc] = useState<CollectedDocument | null>(null)
+  const [checklistLoading, setChecklistLoading] = useState(false)
+
+  const checklistFileInputRef = React.useRef<HTMLInputElement | null>(null)
+  const [targetChecklistDoc, setTargetChecklistDoc] = useState<CollectedDocument | null>(null)
+
+  // Auto-extract or upgrade dynamic checklist from PDF if not yet extracted
+  React.useEffect(() => {
+    const existing = tender.documentReady?.checklist || tender.portalUpload?.checklist
+    if (existing && existing.length > 0 && !isOldFallbackChecklist(existing)) {
+      return
+    }
+
+    setChecklistLoading(true)
+    extractPortalChecklist(tender, tender.portalUpload?.documents || [], existing)
+      .then(res => {
+        if (res.items && res.items.length > 0) {
+          const updated: Tender = {
+            ...tender,
+            documentReady: {
+              ...(tender.documentReady || {}),
+              checklist: res.items,
+              checklistTitle: res.sectionTitle,
+              checklistSource: res.source,
+            },
+            portalUpload: {
+              ...(tender.portalUpload || { documents: [] }),
+              checklist: res.items,
+              checklistSource: res.sectionTitle,
+            },
+          }
+          onUpdate?.(updated)
+        }
+      })
+      .catch(err => {
+        console.warn('Checklist extraction in Document Ready:', err)
+      })
+      .finally(() => {
+        setChecklistLoading(false)
+      })
+  }, [tender.id])
+
+  const handleRefreshChecklist = async () => {
+    setChecklistLoading(true)
+    try {
+      const res = await extractPortalChecklist(
+        tender,
+        tender.portalUpload?.documents || [],
+        tender.documentReady?.checklist
+      )
+      if (res.items && res.items.length > 0) {
+        const updated: Tender = {
+          ...tender,
+          documentReady: {
+            ...(tender.documentReady || {}),
+            checklist: res.items,
+            checklistTitle: res.sectionTitle,
+            checklistSource: res.source,
+          },
+          portalUpload: {
+            ...(tender.portalUpload || { documents: [] }),
+            checklist: res.items,
+            checklistSource: res.sectionTitle,
+          },
+        }
+        onUpdate?.(updated)
+      }
+    } catch (err) {
+      console.error('Refresh checklist error:', err)
+    } finally {
+      setChecklistLoading(false)
+    }
+  }
+
+  const handleAttachChecklistFile = (doc: CollectedDocument) => {
+    setTargetChecklistDoc(doc)
+    if (checklistFileInputRef.current) {
+      checklistFileInputRef.current.value = ''
+      checklistFileInputRef.current.click()
+    }
+  }
+
+  const onChecklistFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!targetChecklistDoc) return
+    handleNativeFileSelect(e, fileData => {
+      const updated: Tender = { ...tender }
+      const key = targetChecklistDoc.checklistItemId || targetChecklistDoc.id.replace('chk-', '')
+      const newUploadItem: PortalUploadDocumentItem = {
+        id: `chk-doc-${Date.now()}`,
+        fieldKey: key,
+        fieldLabel: targetChecklistDoc.title,
+        name: fileData.name,
+        size: fileData.size,
+        type: fileData.type,
+        dataUrl: fileData.dataUrl,
+        uploadedAt: new Date().toISOString(),
+        source: 'manual-upload',
+        status: 'Uploaded',
+        remarks: targetChecklistDoc.referenceNote,
+      }
+
+      const dr = { ...(updated.documentReady || {}) }
+      dr.checklistDocs = [
+        ...(dr.checklistDocs || []).filter(d => d.fieldKey !== key),
+        newUploadItem,
+      ]
+      updated.documentReady = dr
+
+      const pu = { ...(updated.portalUpload || { documents: [] }) }
+      pu.documents = [
+        ...(pu.documents || []).filter(d => d.fieldKey !== key),
+        newUploadItem,
+      ]
+      updated.portalUpload = pu
+
+      onUpdate?.(updated)
+      setTargetChecklistDoc(null)
+    })
+  }
 
   // Sub-modals state
   const [uploadModalOpen, setUploadModalOpen] = useState(false)
@@ -105,8 +232,12 @@ export function MasterDocumentDossierModal({
   })
 
   const filteredDocs = useMemo(() => {
+    if (activeCategory === 'portal-checklist') {
+      return dossier.categories.portalChecklist
+    }
     if (activeCategory === 'all') {
       return [
+        ...dossier.categories.portalChecklist,
         ...dossier.categories.tenderNotice,
         ...dossier.categories.corrigendum,
         ...dossier.categories.eligibility,
@@ -286,6 +417,36 @@ export function MasterDocumentDossierModal({
       if (editDocRemarks) dr.remarks = editDocRemarks
       updated.documentReady = dr
     }
+    // Check Checklist Documents
+    else if (docId.startsWith('chk-')) {
+      const cleanKey = editDocModal.checklistItemId || docId.replace('chk-', '')
+      const newFileObj: PortalUploadDocumentItem = {
+        id: editDocModal.id,
+        fieldKey: cleanKey,
+        fieldLabel: editDocTitle || editDocModal.title,
+        name: replaceFile ? replaceFile.name : editDocModal.fileName,
+        size: replaceFile ? replaceFile.size : editDocModal.fileSize,
+        type: replaceFile ? replaceFile.type : editDocModal.fileType,
+        uploadedAt: new Date().toISOString(),
+        dataUrl: replaceFile ? replaceFile.dataUrl : editDocModal.dataUrl,
+        source: 'manual-upload',
+        status: 'Uploaded',
+        remarks: editDocRemarks,
+      }
+      const dr = { ...(updated.documentReady || {}) }
+      dr.checklistDocs = [
+        ...(dr.checklistDocs || []).filter(d => d.fieldKey !== cleanKey),
+        newFileObj,
+      ]
+      updated.documentReady = dr
+
+      const pu = { ...(updated.portalUpload || { documents: [] }) }
+      pu.documents = [
+        ...(pu.documents || []).filter(d => d.fieldKey !== cleanKey),
+        newFileObj,
+      ]
+      updated.portalUpload = pu
+    }
 
     onUpdate?.(updated)
     setEditDocModal(null)
@@ -324,6 +485,15 @@ export function MasterDocumentDossierModal({
         cd => cd.id !== doc.id.replace('custom-', '') && cd.name !== doc.fileName
       )
       updated.documentReady = dr
+    } else if (docId.startsWith('chk-')) {
+      const cleanKey = doc.checklistItemId || docId.replace('chk-', '')
+      const dr = { ...(updated.documentReady || {}) }
+      dr.checklistDocs = (dr.checklistDocs || []).filter(d => d.fieldKey !== cleanKey)
+      updated.documentReady = dr
+
+      const pu = { ...(updated.portalUpload || { documents: [] }) }
+      pu.documents = (pu.documents || []).filter(d => d.fieldKey !== cleanKey)
+      updated.portalUpload = pu
     }
 
     onUpdate?.(updated)
@@ -516,6 +686,37 @@ This document record was verified and registered in the Tender FMS workflow.
       if (updatedDoc.remarks) dr.remarks = updatedDoc.remarks
       updated.documentReady = dr
     }
+    // 3b. If it came from Checklist Item
+    else if (docId.startsWith('chk-')) {
+      const cleanKey = targetDoc.checklistItemId || docId.replace('chk-', '')
+      const updatedItem: PortalUploadDocumentItem = {
+        id: targetDoc.id,
+        fieldKey: cleanKey,
+        fieldLabel: updatedDoc.title || targetDoc.title,
+        name: updatedDoc.fileName || targetDoc.fileName,
+        size: updatedDoc.fileSize !== undefined ? updatedDoc.fileSize : targetDoc.fileSize,
+        type: updatedDoc.fileType || targetDoc.fileType,
+        uploadedAt: now,
+        dataUrl: updatedDoc.dataUrl || targetDoc.dataUrl,
+        source: 'manual-upload',
+        status: 'Uploaded',
+        remarks: updatedDoc.remarks,
+        letterContent,
+      }
+      const dr = { ...(updated.documentReady || {}) }
+      dr.checklistDocs = [
+        ...(dr.checklistDocs || []).filter(d => d.fieldKey !== cleanKey),
+        updatedItem,
+      ]
+      updated.documentReady = dr
+
+      const pu = { ...(updated.portalUpload || { documents: [] }) }
+      pu.documents = [
+        ...(pu.documents || []).filter(d => d.fieldKey !== cleanKey),
+        updatedItem,
+      ]
+      updated.portalUpload = pu
+    }
     // 4. Default: Record in customDocs
     else {
       const dr = { ...(updated.documentReady || {}) }
@@ -660,6 +861,34 @@ This document record was verified and registered in the Tender FMS workflow.
 
         {/* Categories Bar */}
         <div className="px-5 md:px-6 pt-3 pb-2 border-b border-slate-200 bg-white flex items-center gap-2 overflow-x-auto scrollbar-none flex-shrink-0">
+          {/* 1. Official Tender Checklist Tab (Dynamic from tender NIT) */}
+          <button
+            onClick={() => setActiveCategory('portal-checklist')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all flex items-center gap-1.5 ${
+              activeCategory === 'portal-checklist'
+                ? 'bg-blue-600 text-white shadow-sm'
+                : 'text-blue-700 bg-blue-50/70 hover:bg-blue-100/70 border border-blue-200'
+            }`}
+          >
+            {checklistLoading ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" />
+            ) : (
+              <span>📋</span>
+            )}
+            <span>Official Tender Checklist ({dossier.categories.portalChecklist?.length || 0})</span>
+            <span
+              className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
+                activeCategory === 'portal-checklist'
+                  ? 'bg-white/20 text-white'
+                  : (dossier.attachedChecklistCount || 0) >= (dossier.totalChecklistCount || 1)
+                  ? 'bg-emerald-200 text-emerald-900'
+                  : 'bg-blue-200 text-blue-900'
+              }`}
+            >
+              {dossier.attachedChecklistCount || 0}/{dossier.totalChecklistCount || 0} Ready
+            </span>
+          </button>
+
           <button
             onClick={() => setActiveCategory('all')}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all ${
@@ -742,6 +971,78 @@ This document record was verified and registered in the Tender FMS workflow.
 
         {/* Modal Scrollable Body */}
         <div className="flex-1 overflow-y-auto p-5 md:p-6 space-y-6">
+          {/* Dynamic Checklist Status & Quick Actions Banner */}
+          <div className="border border-blue-200 bg-linear-to-r from-blue-50/90 via-indigo-50/70 to-slate-50 rounded-xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-2xs">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-[11px] font-bold text-blue-900 uppercase tracking-wider flex items-center gap-1.5">
+                  <CheckCircle2 className="w-4 h-4 text-blue-600" />
+                  Dynamic Submission Checklist
+                </span>
+                <span className="text-xs font-semibold text-slate-500">
+                  Section: <strong className="text-slate-800">{dossier.checklistTitle || 'E-Bidding Portal Checklist'}</strong>
+                </span>
+              </div>
+              <p className="text-xs text-slate-600">
+                {dossier.totalChecklistCount || 0} statutory document fields generated according to this tender's requirements.
+              </p>
+              {/* Progress bar */}
+              <div className="flex items-center gap-2 pt-1 max-w-md">
+                <div className="flex-1 bg-slate-200 h-2 rounded-full overflow-hidden">
+                  <div
+                    className="bg-emerald-500 h-full transition-all duration-300"
+                    style={{
+                      width: `${
+                        dossier.totalChecklistCount
+                          ? Math.round(
+                              ((dossier.attachedChecklistCount || 0) / dossier.totalChecklistCount) * 100
+                            )
+                          : 0
+                      }%`,
+                    }}
+                  />
+                </div>
+                <span className="text-[11px] font-bold text-slate-700 whitespace-nowrap">
+                  {dossier.attachedChecklistCount || 0} / {dossier.totalChecklistCount || 0} Attached (
+                  {dossier.totalChecklistCount
+                    ? Math.round(
+                        ((dossier.attachedChecklistCount || 0) / dossier.totalChecklistCount) * 100
+                      )
+                    : 0}
+                  %)
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <button
+                type="button"
+                onClick={handleRefreshChecklist}
+                disabled={checklistLoading}
+                className="secondary-button text-xs py-1.5 px-3 flex items-center gap-1.5"
+                title="Re-scan tender NIT PDF to refresh checklist"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${checklistLoading ? 'animate-spin text-blue-600' : ''}`} />
+                <span>{checklistLoading ? 'Extracting from PDF...' : 'Refresh from PDF'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setNewDocFile(null)
+                  setNewDocTitle('')
+                  setNewDocCategory('additional')
+                  setUploadModalOpen(true)
+                }}
+                className="primary-button text-xs py-1.5 px-3 flex items-center gap-1.5 shadow-xs"
+                title="Upload document to this dossier"
+              >
+                <UploadCloud className="w-3.5 h-3.5" />
+                <span>Upload Document</span>
+              </button>
+            </div>
+          </div>
+
           {/* Key Text / EMD / Remarks Summary Banner */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             {/* EMD Reference Box */}
@@ -870,25 +1171,51 @@ This document record was verified and registered in the Tender FMS workflow.
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
                 {filteredDocs.map(doc => {
+                  const isChecklistItem = doc.category === 'portal-checklist'
                   const isModifiable =
                     doc.category === 'eligibility' ||
                     doc.category === 'sample' ||
-                    doc.category === 'additional'
+                    doc.category === 'additional' ||
+                    (doc.category === 'portal-checklist' && doc.isAttached)
 
                   return (
                     <div
                       key={doc.id}
-                      className="border border-slate-200 rounded-xl p-3.5 bg-white hover:border-blue-300 hover:shadow-md transition-all flex flex-col justify-between gap-3 group"
+                      className={`border rounded-xl p-3.5 bg-white transition-all flex flex-col justify-between gap-3 group ${
+                        isChecklistItem && !doc.isAttached
+                          ? 'border-amber-200 bg-amber-50/20 hover:border-amber-300'
+                          : 'border-slate-200 hover:border-blue-300 hover:shadow-md'
+                      }`}
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex items-start gap-2.5 min-w-0">
                           <div className="mt-0.5">{getFileBadge(doc.fileTypeGroup)}</div>
                           <div className="min-w-0">
-                            <strong className="block text-xs font-bold text-slate-900 truncate" title={doc.title}>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              {isChecklistItem && doc.envelope && (
+                                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200">
+                                  {doc.envelope}
+                                </span>
+                              )}
+                              {isChecklistItem && (
+                                <span
+                                  className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                                    doc.isMandatory
+                                      ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                                      : 'bg-amber-50 text-amber-700 border border-amber-200'
+                                  }`}
+                                >
+                                  {doc.requirement || (doc.isMandatory ? 'Mandatory' : 'Conditional')}
+                                </span>
+                              )}
+                            </div>
+                            <strong className="block text-xs font-bold text-slate-900 truncate mt-0.5" title={doc.title}>
                               {doc.title}
                             </strong>
                             <span
-                              className="block text-[11px] text-slate-500 truncate max-w-[260px] font-mono mt-0.5"
+                              className={`block text-[11px] truncate max-w-[260px] font-mono mt-0.5 ${
+                                doc.isAttached ? 'text-slate-500' : 'text-amber-700 font-semibold'
+                              }`}
                               title={doc.fileName}
                             >
                               {doc.fileName}
@@ -898,33 +1225,70 @@ This document record was verified and registered in the Tender FMS workflow.
 
                         <span
                           className={`text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap ${
-                            doc.source === 'auto-fetched'
+                            isChecklistItem
+                              ? doc.isAttached
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : 'bg-amber-100 text-amber-900'
+                              : doc.source === 'auto-fetched'
                               ? 'bg-blue-100 text-blue-800'
                               : doc.source === 'system-generated'
                               ? 'bg-emerald-100 text-emerald-800'
                               : 'bg-slate-100 text-slate-700'
                           }`}
                         >
-                          {doc.sourceLabel}
+                          {isChecklistItem
+                            ? doc.isAttached
+                              ? '✓ Attached / Ready'
+                              : '⚠️ Action Required'
+                            : doc.sourceLabel}
                         </span>
                       </div>
 
                       {/* Metadata & reference */}
                       <div className="text-[11px] text-slate-500 bg-slate-50 rounded-lg p-2 space-y-1">
                         <div className="flex items-center justify-between">
-                          <span className="font-medium text-slate-600">Origin Stage:</span>
-                          <span className="font-semibold text-slate-800">{doc.stageOrigin}</span>
+                          <span className="font-medium text-slate-600">Origin / Clause:</span>
+                          <span className="font-semibold text-slate-800 truncate max-w-[200px]" title={doc.stageOrigin}>
+                            {doc.stageOrigin}
+                          </span>
                         </div>
-                        <div className="flex items-center justify-between">
-                          <span className="font-medium text-slate-600">File Size:</span>
-                          <span>{formatFileSize(doc.fileSize)}</span>
-                        </div>
+                        {doc.isAttached && (
+                          <div className="flex items-center justify-between">
+                            <span className="font-medium text-slate-600">File Size:</span>
+                            <span>{formatFileSize(doc.fileSize)}</span>
+                          </div>
+                        )}
                         {doc.referenceNote && (
-                          <p className="text-[10px] text-slate-600 italic line-clamp-1 border-t border-slate-200/60 pt-1 mt-1">
+                          <p className="text-[10px] text-slate-600 italic line-clamp-2 border-t border-slate-200/60 pt-1 mt-1">
                             Ref: {doc.referenceNote}
                           </p>
                         )}
                       </div>
+
+                      {/* Unattached Checklist Requirement Quick Action */}
+                      {isChecklistItem && !doc.isAttached && (
+                        <div className="bg-amber-50 border border-amber-200 rounded-lg p-2 text-xs flex items-center justify-between gap-2">
+                          <span className="text-[11px] text-amber-900 font-medium">Attach document for submission packet:</span>
+                          <div className="flex items-center gap-1.5 flex-shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => handleAttachChecklistFile(doc)}
+                              className="primary-button text-[11px] py-1 px-2.5 flex items-center gap-1 shadow-xs"
+                              title="Attach file directly"
+                            >
+                              <UploadCloud className="w-3.5 h-3.5" /> Upload File
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenWordEditor(doc)}
+                              className="secondary-button text-[11px] py-1 px-2 flex items-center gap-1"
+                              title="Create in Word Letter Editor"
+                            >
+                              <FileEdit className="w-3.5 h-3.5 text-indigo-600" /> Word
+                            </button>
+                          </div>
+                        </div>
+                      )}
 
                       {/* Card Actions: Preview, Download, Edit/Replace, Remove */}
                       <div className="flex items-center justify-between pt-1 border-t border-slate-100 gap-2">
@@ -958,29 +1322,33 @@ This document record was verified and registered in the Tender FMS workflow.
                         </div>
 
                         <div className="flex items-center gap-1.5 flex-wrap justify-end">
-                          <button
-                            type="button"
-                            onClick={() => setPreviewDoc(doc)}
-                            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
-                          >
-                            <Eye className="w-3.5 h-3.5" /> Preview
-                          </button>
+                          {doc.isAttached && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => setPreviewDoc(doc)}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
+                              >
+                                <Eye className="w-3.5 h-3.5" /> Preview
+                              </button>
 
-                          <button
-                            type="button"
-                            onClick={() => handleDownload(doc)}
-                            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors"
-                          >
-                            <Download className="w-3.5 h-3.5" /> Download
-                          </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDownload(doc)}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors"
+                              >
+                                <Download className="w-3.5 h-3.5" /> Download
+                              </button>
+                            </>
+                          )}
 
                           <button
                             type="button"
                             onClick={() => handleOpenWordEditor(doc)}
                             className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg transition-colors shadow-sm"
-                            title="Convert the original attached file into an editable Word document"
+                            title="Convert the attached file into an editable Word document or create official letter"
                           >
-                            <FileEdit className="w-3.5 h-3.5 text-indigo-600" /> Word / Edit Document
+                            <FileEdit className="w-3.5 h-3.5 text-indigo-600" /> Word / Edit
                           </button>
                         </div>
                       </div>
@@ -1023,6 +1391,15 @@ This document record was verified and registered in the Tender FMS workflow.
           </div>
         </div>
       </div>
+
+      {/* Hidden File Input for Direct Checklist Attachment */}
+      <input
+        type="file"
+        ref={checklistFileInputRef}
+        onChange={onChecklistFileSelected}
+        className="hidden"
+        accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp,.txt"
+      />
 
       {/* 1. UPLOAD NEW PDF / DOCUMENT MODAL */}
       {uploadModalOpen && (
@@ -1071,6 +1448,7 @@ This document record was verified and registered in the Tender FMS workflow.
                   onChange={e => setNewDocCategory(e.target.value as DocumentCategory)}
                   className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-blue-500 bg-white"
                 >
+                  <option value="portal-checklist">Official Tender Checklist Requirement</option>
                   <option value="additional">Additional Document (Document Ready)</option>
                   <option value="eligibility">Eligibility Verification Document</option>
                   <option value="sample">Sample Details & Technical Testing</option>

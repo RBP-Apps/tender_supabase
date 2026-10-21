@@ -1,6 +1,6 @@
 'use client'
 
-import React from 'react'
+import React, { useState } from 'react'
 import {
   X,
   User,
@@ -14,6 +14,8 @@ import {
   XCircle,
   KeyRound,
   ShieldAlert,
+  Eye,
+  EyeOff,
 } from 'lucide-react'
 import { AppUser, APP_MODULES } from '@/types/user'
 
@@ -24,6 +26,7 @@ interface ViewUserModalProps {
 }
 
 export function ViewUserModal({ user, onClose, onEdit }: ViewUserModalProps) {
+  const [showPassword, setShowPassword] = useState(false)
   const permittedModules = APP_MODULES.filter(m => user.pageAccess?.includes(m.path))
   const initials = user.username.slice(0, 2).toUpperCase()
 
@@ -111,11 +114,21 @@ export function ViewUserModal({ user, onClose, onEdit }: ViewUserModalProps) {
             </div>
 
             <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1">
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
-                <KeyRound className="w-3 h-3" /> Password Security
-              </span>
-              <p className="font-mono text-slate-600 text-xs">
-                •••••••• (SHA-256 Encrypted)
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
+                  <KeyRound className="w-3 h-3 text-blue-600" /> Password
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="text-[10px] font-semibold text-blue-600 hover:text-blue-800 flex items-center gap-1 cursor-pointer transition-colors"
+                >
+                  {showPassword ? <EyeOff className="w-3 h-3 text-blue-600" /> : <Eye className="w-3 h-3 text-blue-600" />}
+                  <span>{showPassword ? 'Hide' : 'Show'}</span>
+                </button>
+              </div>
+              <p className="font-mono text-slate-800 text-xs font-semibold">
+                {showPassword ? (user.passwordPlain || '••••••••') : '••••••••'}
               </p>
             </div>
 

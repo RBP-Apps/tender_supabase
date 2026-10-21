@@ -387,6 +387,7 @@ export default function UserManagementPage() {
       {/* Edit User Modal */}
       {editUser && (
         <UserModal
+          key={editUser.id}
           mode="edit"
           user={editUser}
           onClose={() => setEditUser(null)}
@@ -397,6 +398,7 @@ export default function UserManagementPage() {
       {/* View User Modal */}
       {viewUser && (
         <ViewUserModal
+          key={viewUser.id}
           user={viewUser}
           onClose={() => setViewUser(null)}
           onEdit={() => setEditUser(viewUser)}

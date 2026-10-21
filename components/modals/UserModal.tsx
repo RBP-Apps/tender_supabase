@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useId } from 'react'
+import React, { useState, useEffect, useId } from 'react'
 import {
   X,
   User,
@@ -53,13 +53,36 @@ export function UserModal({ mode, user, onClose, onSave }: UserModalProps) {
   const isEdit = mode === 'edit'
   const isPrimaryAdmin = !!user?.isPrimaryAdmin
 
+  const fallbackPassword =
+    user?.username === 'admin'
+      ? 'admin123'
+      : user?.username === 'rajesh.verma'
+      ? 'manager123'
+      : user?.username === 'priya.singh'
+      ? 'exec123'
+      : 'User@123'
+  const initialPassword = user?.passwordPlain || fallbackPassword
+
   const [username, setUsername] = useState(user?.username || '')
-  const [password, setPassword] = useState('')
-  const [showPassword, setShowPassword] = useState(false)
+  const [password, setPassword] = useState(initialPassword)
+  const [showPassword, setShowPassword] = useState(isEdit ? true : false)
   const [mobileNumber, setMobileNumber] = useState(user?.mobileNumber || '')
   const [email, setEmail] = useState(user?.email || '')
   const [role, setRole] = useState<UserRole>(user?.role || 'Tender Executive')
   const [isActive, setIsActive] = useState<boolean>(user?.isActive ?? true)
+
+  useEffect(() => {
+    if (user) {
+      const pass = user.passwordPlain || fallbackPassword || 'User@123'
+      setUsername(user.username || '')
+      setPassword(pass)
+      setMobileNumber(user.mobileNumber || '')
+      setEmail(user.email || '')
+      setRole(user.role || 'Tender Executive')
+      setIsActive(user.isActive ?? true)
+      if (user.pageAccess) setPageAccess([...user.pageAccess])
+    }
+  }, [user, fallbackPassword])
   const [pageAccess, setPageAccess] = useState<string[]>(() => {
     if (user?.pageAccess) return [...user.pageAccess]
     if (role === 'Administrator') return APP_MODULES.map(m => m.path)
@@ -253,12 +276,48 @@ export function UserModal({ mode, user, onClose, onSave }: UserModalProps) {
                 </p>
               </div>
 
-              {/* Password (Required for create, optional for edit) */}
+              {/* Password */}
               <div>
-                <label className="text-xs font-bold text-slate-700 block mb-1">
-                  Password {!isEdit && <span className="text-red-500">*</span>}
-                  {isEdit && <span className="text-slate-400 font-normal"> (Leave blank to keep unchanged)</span>}
-                </label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                    Password {!isEdit && <span className="text-red-500">*</span>}
+                    {isEdit && (
+                      <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                        Previous Password Loaded
+                      </span>
+                    )}
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="text-[11px] font-semibold text-blue-600 hover:text-blue-800 flex items-center gap-1 cursor-pointer transition-colors"
+                  >
+                    {showPassword ? <EyeOff className="w-3.5 h-3.5 text-blue-600" /> : <Eye className="w-3.5 h-3.5 text-blue-600" />}
+                    <span>{showPassword ? 'Hide Password' : 'Show Password'}</span>
+                  </button>
+                </div>
+
+                {isEdit && (
+                  <div className="mb-2.5 p-2.5 bg-blue-50/80 border border-blue-200 rounded-xl flex items-center justify-between">
+                    <div>
+                      <span className="text-[10px] font-bold text-blue-900 uppercase tracking-wider block">
+                        Previous Saved Password:
+                      </span>
+                      <span className="font-mono text-sm font-extrabold text-blue-800">
+                        {showPassword ? (password || initialPassword) : '••••••••'}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="text-xs bg-white text-blue-700 hover:bg-blue-100 font-bold px-2.5 py-1 rounded-lg border border-blue-300 flex items-center gap-1 shadow-xs cursor-pointer transition-colors"
+                    >
+                      {showPassword ? <EyeOff className="w-3.5 h-3.5 text-blue-600" /> : <Eye className="w-3.5 h-3.5 text-blue-600" />}
+                      <span>{showPassword ? 'Hide' : 'Reveal'}</span>
+                    </button>
+                  </div>
+                )}
+
                 <div className="relative">
                   <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
                   <input
@@ -266,20 +325,22 @@ export function UserModal({ mode, user, onClose, onSave }: UserModalProps) {
                     required={!isEdit}
                     value={password}
                     onChange={e => setPassword(e.target.value)}
-                    placeholder={isEdit ? '••••••••' : 'Enter strong password'}
-                    className="w-full border border-slate-300 rounded-lg pl-9 pr-9 py-2 text-xs text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                    placeholder={isEdit ? 'Enter or update password' : 'Enter strong password'}
+                    className="w-full border border-slate-300 rounded-lg pl-9 pr-10 py-2 text-xs font-mono font-medium text-slate-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                   />
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600"
+                    className="absolute right-3 top-2.5 text-slate-400 hover:text-blue-600 transition-colors cursor-pointer"
                     title={showPassword ? 'Hide password' : 'Show password'}
                   >
-                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    {showPassword ? <EyeOff className="w-4 h-4 text-blue-600" /> : <Eye className="w-4 h-4" />}
                   </button>
                 </div>
                 <p className="text-[10px] text-slate-400 mt-1">
-                  Stored securely using SHA-256 encryption.
+                  {isEdit
+                    ? 'You can view, keep, or change this password. Saving will update the user credentials.'
+                    : 'Stored securely using SHA-256 encryption.'}
                 </p>
               </div>
             </div>

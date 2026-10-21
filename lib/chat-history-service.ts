@@ -104,26 +104,13 @@ export function createNewConversation(scope: string = 'all'): ChatConversation {
       },
     ],
   }
-}
+}// In-memory active conversation ID tracker
+let inMemoryActiveConvId: string | null = null
 
 /**
- * 1. LOAD ALL CONVERSATIONS (Local Storage + Supabase Sync)
+ * 1. LOAD ALL CONVERSATIONS (Direct Supabase Database)
  */
 export async function loadAllConversations(): Promise<ChatConversation[]> {
-  // 1.1 Read from localStorage first for instant rendering
-  let localList: ChatConversation[] = []
-  if (typeof window !== 'undefined') {
-    try {
-      const saved = localStorage.getItem(LOCAL_STORAGE_KEY)
-      if (saved) {
-        localList = JSON.parse(saved)
-      }
-    } catch (e) {
-      console.warn('Failed to parse conversations from localStorage:', e)
-    }
-  }
-
-  // 1.2 Try fetching from Supabase in background
   try {
     const { data: convData, error: convErr } = await supabase
       .from('tender_chat_conversations')
@@ -166,52 +153,24 @@ export async function loadAllConversations(): Promise<ChatConversation[]> {
           }
         })
 
-        // Save DB list to local storage
-        if (typeof window !== 'undefined') {
-          localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(dbList))
-        }
         return dbList
       }
     }
   } catch (err) {
-    // Supabase table not created yet or network offline - fallback to local storage
-    console.log('Supabase chat sync notice (using resilient local storage):', err)
+    console.log('Supabase chat sync notice:', err)
   }
 
-  // If local list was empty, return array with a new conversation
-  if (localList.length === 0) {
-    const initial = createNewConversation('all')
-    localList = [initial]
-    if (typeof window !== 'undefined') {
-      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(localList))
-    }
-  }
-
-  return localList
+  // If no conversations found in database, return initial blank conversation
+  return [createNewConversation('all')]
 }
 
 /**
- * 2. SAVE CONVERSATION (Optimistic Local Storage + Supabase Persistence)
+ * 2. SAVE CONVERSATION (Direct Supabase Database Persistence)
  */
 export async function saveConversation(
   conv: ChatConversation,
   allConversations: ChatConversation[]
 ): Promise<void> {
-  const updatedList = [
-    conv,
-    ...allConversations.filter(c => c.id !== conv.id),
-  ]
-
-  // 2.1 Instant LocalStorage Save
-  if (typeof window !== 'undefined') {
-    try {
-      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(updatedList))
-    } catch (e) {
-      console.warn('LocalStorage save error:', e)
-    }
-  }
-
-  // 2.2 Background Supabase Sync
   try {
     // Upsert conversation row
     await supabase.from('tender_chat_conversations').upsert(
@@ -244,13 +203,12 @@ export async function saveConversation(
       })
     }
   } catch (err) {
-    // Non-blocking error handling
     console.log('Supabase chat save notice:', err)
   }
 }
 
 /**
- * 3. DELETE CONVERSATION
+ * 3. DELETE CONVERSATION (Direct Supabase Database)
  */
 export async function deleteConversation(
   convId: string,
@@ -258,16 +216,6 @@ export async function deleteConversation(
 ): Promise<ChatConversation[]> {
   const filtered = allConversations.filter(c => c.id !== convId)
 
-  // 3.1 Remove from local storage
-  if (typeof window !== 'undefined') {
-    try {
-      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(filtered))
-    } catch (e) {
-      console.warn('LocalStorage delete error:', e)
-    }
-  }
-
-  // 3.2 Remove from Supabase
   try {
     await supabase.from('tender_chat_conversations').delete().eq('id', convId)
   } catch (err) {
@@ -278,7 +226,7 @@ export async function deleteConversation(
 }
 
 /**
- * 4. RENAME CONVERSATION
+ * 4. RENAME CONVERSATION (Direct Supabase Database)
  */
 export async function renameConversation(
   convId: string,
@@ -291,10 +239,6 @@ export async function renameConversation(
     }
     return c
   })
-
-  if (typeof window !== 'undefined') {
-    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(updated))
-  }
 
   try {
     await supabase
@@ -313,13 +257,20 @@ export async function renameConversation(
  */
 export function getSavedActiveConversationId(): string | null {
   if (typeof window !== 'undefined') {
-    return localStorage.getItem(ACTIVE_CONV_KEY)
+    try {
+      return window.sessionStorage.getItem('tender_active_conv_id') || inMemoryActiveConvId
+    } catch {
+      return inMemoryActiveConvId
+    }
   }
-  return null
+  return inMemoryActiveConvId
 }
 
 export function setSavedActiveConversationId(id: string): void {
+  inMemoryActiveConvId = id
   if (typeof window !== 'undefined') {
-    localStorage.setItem(ACTIVE_CONV_KEY, id)
+    try {
+      window.sessionStorage.setItem('tender_active_conv_id', id)
+    } catch {}
   }
 }

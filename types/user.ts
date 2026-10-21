@@ -131,6 +131,7 @@ export interface AppUser {
   id: string
   username: string
   passwordHash?: string
+  passwordPlain?: string
   mobileNumber?: string
   email?: string
   pageAccess: string[] // List of paths, e.g. ['/', '/tender-details', '/eligibility-check']
@@ -144,9 +145,11 @@ export interface AppUser {
 export interface UserFormData {
   username: string
   password?: string
+  passwordPlain?: string
   mobileNumber?: string
   email?: string
   pageAccess: string[]
   role: UserRole
   isActive: boolean
 }
+

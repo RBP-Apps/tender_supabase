@@ -161,13 +161,6 @@ export interface EmdReadyData {
   history?: EmdReadyHistoryEntry[]
 }
 
-export interface DocumentReadyData {
-  customDocs?: SampleDocumentItem[]
-  remarks?: string
-  completedAt?: string
-  completedBy?: string
-}
-
 export interface PortalUploadDocumentItem {
   id: string
   fieldKey: string
@@ -180,6 +173,7 @@ export interface PortalUploadDocumentItem {
   source?: string
   status?: 'Pending' | 'Uploaded' | 'Verified'
   remarks?: string
+  letterContent?: any
 }
 
 export interface PortalChecklistItem {
@@ -192,6 +186,17 @@ export interface PortalChecklistItem {
   checked: boolean
   matchedFieldKey?: string
   matchedDocumentName?: string
+}
+
+export interface DocumentReadyData {
+  customDocs?: SampleDocumentItem[]
+  checklist?: PortalChecklistItem[]
+  checklistTitle?: string
+  checklistSource?: string
+  checklistDocs?: PortalUploadDocumentItem[]
+  remarks?: string
+  completedAt?: string
+  completedBy?: string
 }
 
 export interface PortalUploadHistoryEntry {

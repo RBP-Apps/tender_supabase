@@ -6,6 +6,7 @@ import {
   BankAccountDetails,
   PortalChecklistItem,
 } from '@/types/tender'
+import { getHeuristicChecklist } from './portal-checklist-extractor'
 
 export type DocumentCategory =
   | 'portal-checklist'
@@ -375,8 +376,283 @@ export function collectAllTenderDocuments(tender: Tender): DocumentDossierSummar
     })
   }
 
+  // 7. DYNAMIC TENDER CHECKLIST (Official document requirements extracted from Tender NIT / PDF)
+  const checklistItems: PortalChecklistItem[] =
+    tender.documentReady?.checklist && tender.documentReady.checklist.length > 0
+      ? tender.documentReady.checklist
+      : tender.portalUpload?.checklist && tender.portalUpload.checklist.length > 0
+      ? tender.portalUpload.checklist
+      : getHeuristicChecklist(tender)
+
+  const checklistDocs: CollectedDocument[] = []
+
+  checklistItems.forEach((chk, idx) => {
+    const slNo = idx + 1
+    const chkKey = (chk.docName || '').toLowerCase()
+
+    // 1. Direct upload in documentReady.checklistDocs
+    const directDoc = tender.documentReady?.checklistDocs?.find(
+      d => d.fieldKey === chk.id || d.id === chk.id || (chk.matchedFieldKey && d.fieldKey === chk.matchedFieldKey)
+    )
+
+    // 2. Portal upload documents
+    const portalDoc = tender.portalUpload?.documents?.find(
+      d => d.fieldKey === chk.id || d.id === chk.id || (chk.matchedFieldKey && d.fieldKey === chk.matchedFieldKey)
+    )
+
+    // 3. Stage-by-stage matches
+    let matchedFile: {
+      name: string
+      size?: number
+      type?: string
+      dataUrl?: string
+      uploadedAt?: string
+      source: 'auto-fetched' | 'manual-upload' | 'system-generated' | 'bid-details'
+      sourceLabel: string
+      letterContent?: any
+      remarks?: string
+    } | null = null
+
+    if (directDoc) {
+      matchedFile = {
+        name: directDoc.name,
+        size: directDoc.size,
+        type: directDoc.type,
+        dataUrl: directDoc.dataUrl,
+        uploadedAt: directDoc.uploadedAt,
+        source: 'manual-upload',
+        sourceLabel: 'Uploaded to Checklist Field',
+        letterContent: directDoc.letterContent,
+        remarks: directDoc.remarks,
+      }
+    } else if (portalDoc) {
+      matchedFile = {
+        name: portalDoc.name,
+        size: portalDoc.size,
+        type: portalDoc.type,
+        dataUrl: portalDoc.dataUrl,
+        uploadedAt: portalDoc.uploadedAt,
+        source: 'manual-upload',
+        sourceLabel: 'Portal Submission Packet',
+        letterContent: portalDoc.letterContent,
+        remarks: portalDoc.remarks,
+      }
+    } else if (
+      chk.matchedFieldKey === 'tenderNotice' ||
+      chkKey.includes('tender notice') ||
+      chkKey.includes('nit') ||
+      chkKey.includes('acceptance of terms')
+    ) {
+      if (tender.tenderDoc) {
+        matchedFile = {
+          name: tender.tenderDoc.name,
+          size: tender.tenderDoc.size,
+          type: tender.tenderDoc.type,
+          dataUrl: tender.tenderDoc.dataUrl,
+          uploadedAt: tender.tenderDoc.uploadedAt,
+          source: 'auto-fetched',
+          sourceLabel: 'Stage 01 Tender NIT',
+        }
+      }
+    } else if (
+      chk.matchedFieldKey === 'emdProof' ||
+      chkKey.includes('emd') ||
+      chkKey.includes('earnest money') ||
+      chkKey.includes('tender fee') ||
+      chkKey.includes('document fee')
+    ) {
+      if (tender.emdReady) {
+        matchedFile = {
+          name: `EMD_Payment_${tender.emdReady.utrNumber || tender.id}.pdf`,
+          type: 'application/pdf',
+          uploadedAt: tender.emdReady.date,
+          source: 'auto-fetched',
+          sourceLabel: 'Stage 04 EMD Verified Receipt',
+          remarks: `UTR: ${tender.emdReady.utrNumber} · Amount: ₹${tender.emdReady.amount}`,
+        }
+      }
+    } else if (
+      chk.matchedFieldKey === 'turnover' ||
+      chkKey.includes('turnover') ||
+      chkKey.includes('turn over') ||
+      chkKey.includes('net worth') ||
+      chkKey.includes('balance sheet') ||
+      chkKey.includes('ca cert')
+    ) {
+      if (tender.eligibilityCheck?.turnoverDoc) {
+        matchedFile = {
+          name: tender.eligibilityCheck.turnoverDoc.name,
+          size: tender.eligibilityCheck.turnoverDoc.size,
+          type: tender.eligibilityCheck.turnoverDoc.type,
+          dataUrl: tender.eligibilityCheck.turnoverDoc.dataUrl,
+          uploadedAt: tender.eligibilityCheck.turnoverDoc.uploadedAt,
+          source: 'auto-fetched',
+          sourceLabel: 'Stage 03 Eligibility Turnover',
+          letterContent: tender.eligibilityCheck.turnoverDoc.letterContent,
+        }
+      }
+    } else if (
+      chk.matchedFieldKey === 'experience' ||
+      chkKey.includes('experience') ||
+      chkKey.includes('work completion') ||
+      chkKey.includes('work order') ||
+      chkKey.includes('past performance')
+    ) {
+      if (tender.eligibilityCheck?.experienceDoc) {
+        matchedFile = {
+          name: tender.eligibilityCheck.experienceDoc.name,
+          size: tender.eligibilityCheck.experienceDoc.size,
+          type: tender.eligibilityCheck.experienceDoc.type,
+          dataUrl: tender.eligibilityCheck.experienceDoc.dataUrl,
+          uploadedAt: tender.eligibilityCheck.experienceDoc.uploadedAt,
+          source: 'auto-fetched',
+          sourceLabel: 'Stage 03 Experience Certificate',
+          letterContent: tender.eligibilityCheck.experienceDoc.letterContent,
+        }
+      }
+    } else if (
+      chk.matchedFieldKey === 'vendorReg' ||
+      chkKey.includes('vendor') ||
+      chkKey.includes('registration') ||
+      chkKey.includes('gst') ||
+      chkKey.includes('pan card') ||
+      chkKey.includes('incorporation')
+    ) {
+      if (tender.eligibilityCheck?.vendorRegDoc) {
+        matchedFile = {
+          name: tender.eligibilityCheck.vendorRegDoc.name,
+          size: tender.eligibilityCheck.vendorRegDoc.size,
+          type: tender.eligibilityCheck.vendorRegDoc.type,
+          dataUrl: tender.eligibilityCheck.vendorRegDoc.dataUrl,
+          uploadedAt: tender.eligibilityCheck.vendorRegDoc.uploadedAt,
+          source: 'auto-fetched',
+          sourceLabel: 'Stage 03 Statutory Registration',
+          letterContent: tender.eligibilityCheck.vendorRegDoc.letterContent,
+        }
+      }
+    } else if (
+      chk.matchedFieldKey === 'mafLetter' ||
+      chkKey.includes('maf') ||
+      chkKey.includes('manufacturer authorization') ||
+      chkKey.includes('manufacture authorization')
+    ) {
+      if (tender.sampleDetails?.mafLetter) {
+        matchedFile = {
+          name: tender.sampleDetails.mafLetter.name,
+          size: tender.sampleDetails.mafLetter.size,
+          type: tender.sampleDetails.mafLetter.type,
+          dataUrl: tender.sampleDetails.mafLetter.dataUrl,
+          uploadedAt: tender.sampleDetails.mafLetter.uploadedAt,
+          source: 'auto-fetched',
+          sourceLabel: 'Stage 04 Sample MAF Letter',
+          letterContent: tender.sampleDetails.mafLetter.letterContent,
+        }
+      }
+    } else if (
+      chk.matchedFieldKey === 'testReport' ||
+      chkKey.includes('test report') ||
+      chkKey.includes('testing') ||
+      chkKey.includes('laboratory')
+    ) {
+      if (tender.sampleDetails?.testReport) {
+        matchedFile = {
+          name: tender.sampleDetails.testReport.name,
+          size: tender.sampleDetails.testReport.size,
+          type: tender.sampleDetails.testReport.type,
+          dataUrl: tender.sampleDetails.testReport.dataUrl,
+          uploadedAt: tender.sampleDetails.testReport.uploadedAt,
+          source: 'auto-fetched',
+          sourceLabel: 'Stage 04 Test & Quality Report',
+          letterContent: tender.sampleDetails.testReport.letterContent,
+        }
+      }
+    } else if (
+      chk.matchedFieldKey === 'bisCertificate' ||
+      chkKey.includes('bis') ||
+      chkKey.includes('iso') ||
+      chkKey.includes('crs')
+    ) {
+      if (tender.sampleDetails?.bisCertificate) {
+        matchedFile = {
+          name: tender.sampleDetails.bisCertificate.name,
+          size: tender.sampleDetails.bisCertificate.size,
+          type: tender.sampleDetails.bisCertificate.type,
+          dataUrl: tender.sampleDetails.bisCertificate.dataUrl,
+          uploadedAt: tender.sampleDetails.bisCertificate.uploadedAt,
+          source: 'auto-fetched',
+          sourceLabel: 'Stage 04 BIS / ISO Certificate',
+          letterContent: tender.sampleDetails.bisCertificate.letterContent,
+        }
+      }
+    } else if (
+      chk.matchedFieldKey === 'productSample' ||
+      chkKey.includes('product sample') ||
+      chkKey.includes('sample receipt') ||
+      chkKey.includes('datasheet') ||
+      chkKey.includes('sample deposit')
+    ) {
+      if (tender.sampleDetails?.productSample) {
+        matchedFile = {
+          name: tender.sampleDetails.productSample.name,
+          size: tender.sampleDetails.productSample.size,
+          type: tender.sampleDetails.productSample.type,
+          dataUrl: tender.sampleDetails.productSample.dataUrl,
+          uploadedAt: tender.sampleDetails.productSample.uploadedAt,
+          source: 'auto-fetched',
+          sourceLabel: 'Stage 04 Sample Datasheet / Receipt',
+          letterContent: tender.sampleDetails.productSample.letterContent,
+        }
+      }
+    } else if (
+      chk.matchedFieldKey === 'bidAnnexures' ||
+      chkKey.includes('format-') ||
+      chkKey.includes('annexure') ||
+      chkKey.includes('affidavit') ||
+      chkKey.includes('undertaking') ||
+      chkKey.includes('power of attorney') ||
+      chkKey.includes('letter of bid')
+    ) {
+      matchedFile = {
+        name: `Annexure_${tender.id}_${slNo}.pdf`,
+        type: 'application/pdf',
+        source: 'system-generated',
+        sourceLabel: 'Standard Bid Template',
+        remarks: 'Auto-compiled with tender parameters & letterhead',
+      }
+    }
+
+    const isAttached = !!matchedFile
+
+    checklistDocs.push({
+      id: `chk-${chk.id}`,
+      title: chk.docName,
+      category: 'portal-checklist',
+      categoryLabel: chk.envelope ? `Portal Checklist (${chk.envelope})` : 'Portal Checklist Requirement',
+      stageOrigin: chk.clauseOrPageRef || (chk.envelope ? `Checklist: ${chk.envelope}` : 'Tender Checklist (NIT Page)'),
+      fileName: matchedFile ? matchedFile.name : `Pending Upload: ${chk.docName.replace(/^\d+\.\s*/, '').slice(0, 45)}...`,
+      fileType: matchedFile?.type || 'application/pdf',
+      fileTypeGroup: matchedFile ? detectFileTypeGroup(matchedFile.name, matchedFile.type) : 'pdf',
+      fileSize: matchedFile?.size,
+      uploadedAt: matchedFile?.uploadedAt || tender.createdAt || new Date().toISOString(),
+      dataUrl: matchedFile?.dataUrl,
+      source: matchedFile?.source || 'manual-upload',
+      sourceLabel: matchedFile?.sourceLabel || (chk.isMandatory !== false ? 'Required Checklist Field' : 'Optional / Conditional'),
+      referenceNote: chk.applicableDetails || chk.requirement || 'Statutory checklist item for e-portal submission',
+      remarks: matchedFile?.remarks || (chk.isMandatory !== false ? 'Mandatory for technical qualification' : 'Conditional requirement'),
+      letterContent: matchedFile?.letterContent,
+      checklistItemId: chk.id,
+      slNo,
+      envelope: chk.envelope,
+      requirement: chk.requirement || (chk.isMandatory !== false ? 'Mandatory' : 'Conditional'),
+      isMandatory: chk.isMandatory !== false,
+      isAttached,
+      clauseOrPageRef: chk.clauseOrPageRef,
+    })
+  })
+
   // Group by category
   const categories = {
+    portalChecklist: checklistDocs,
     tenderNotice: docs.filter(d => d.category === 'tender-notice'),
     corrigendum: docs.filter(d => d.category === 'corrigendum'),
     eligibility: docs.filter(d => d.category === 'eligibility'),
@@ -392,6 +668,13 @@ export function collectAllTenderDocuments(tender: Tender): DocumentDossierSummar
   const docCount = docs.filter(d => d.fileTypeGroup === 'doc').length
   const otherCount = docs.filter(d => d.fileTypeGroup === 'text' || d.fileTypeGroup === 'other').length
 
+  const totalChecklistCount = checklistDocs.length
+  const attachedChecklistCount = checklistDocs.filter(d => d.isAttached).length
+  const checklistTitle =
+    tender.documentReady?.checklistTitle ||
+    tender.portalUpload?.checklistSource ||
+    'CHECK LIST OF DOCUMENTS TO BE UPLOADED IN THE E-BIDDING PORTAL'
+
   return {
     tenderId: tender.id,
     tenderTitle: tender.title,
@@ -404,6 +687,9 @@ export function collectAllTenderDocuments(tender: Tender): DocumentDossierSummar
     docCount,
     otherCount,
     categories,
+    checklistTitle,
+    totalChecklistCount,
+    attachedChecklistCount,
     remarks: {
       eligibility: tender.eligibilityCheck?.remarks,
       sample: tender.sampleDetails?.remarks,

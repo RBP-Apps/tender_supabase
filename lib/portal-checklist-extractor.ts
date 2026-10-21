@@ -116,6 +116,23 @@ export async function extractPortalChecklist(
   }
 
   // 3. Fallback: Dynamic heuristic extraction tailored specifically to this tender's requirements
+  const dynamicItems = getHeuristicChecklist(tender, attachedDocs, previousCheckedMap)
+
+  return {
+    source: 'local-heuristic',
+    sectionTitle: 'CHECK LIST OF DOCUMENTS TO BE UPLOADED IN THE E-BIDDING PORTAL',
+    items: dynamicItems,
+  }
+}
+
+/**
+ * Synchronous generator for tender-tailored dynamic checklist items.
+ */
+export function getHeuristicChecklist(
+  tender: Tender,
+  attachedDocs: PortalUploadDocumentItem[] = [],
+  previousCheckedMap: Record<string, boolean> = {}
+): PortalChecklistItem[] {
   const dynamicItems: PortalChecklistItem[] = []
 
   // Helper to link matched attached doc
@@ -300,11 +317,7 @@ export async function extractPortalChecklist(
     matchedDocumentName: matchOther?.name,
   })
 
-  return {
-    source: 'local-heuristic',
-    sectionTitle: 'CHECK LIST OF DOCUMENTS TO BE UPLOADED IN THE E-BIDDING PORTAL',
-    items: dynamicItems,
-  }
+  return dynamicItems
 }
 
 /**

@@ -24,13 +24,14 @@ import {
   fetchUsersFromSupabase,
   saveUserToSupabase,
   deleteUserFromSupabase,
-  getStoredLocalUsers,
-  saveStoredLocalUsers,
-  getStoredCurrentUser,
-  saveStoredCurrentUser,
+  authenticateUserDirectly,
+  clearAllLocalApplicationStorage,
+  getSessionUserId,
+  setSessionUserId,
+  clearSessionUser,
   ALL_PAGE_PATHS,
 } from '@/lib/user-service'
-import { hashPassword, verifyPassword } from '@/lib/auth-crypto'
+import { hashPassword, verifyPassword, encodeStoredPassword } from '@/lib/auth-crypto'
 
 interface TenderContextType {
   hydrated: boolean
@@ -67,8 +68,6 @@ interface TenderContextType {
   canAccessPage: (path: string) => boolean
 }
 
-const STORAGE_KEY = 'tender-fms-state-v2'
-
 export { defaultMasters }
 
 export const stagesList: { label: Stage; path: string; short: string }[] = [
@@ -86,31 +85,14 @@ export const stagesList: { label: Stage; path: string; short: string }[] = [
 
 const TenderContext = createContext<TenderContextType | undefined>(undefined)
 
-function syncToLocalStorage(data: {
-  tenders?: Tender[]
-  masters?: Masters
-  selfAccounts?: BankAccountDetails[]
-  companyDocs?: CompanyMasterDocuments
-}) {
-  if (typeof window === 'undefined') return
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY)
-    const existing = raw ? JSON.parse(raw) : {}
-    window.localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
-        ...existing,
-        ...data,
-      })
-    )
-  } catch (e) {
-    console.warn('Could not sync to localStorage:', e)
-  }
+// LocalStorage completely disabled: Database (Supabase) is the single source of truth
+function syncToLocalStorage(_data?: any) {
+  // No-op: zero localStorage persistence
 }
 
 export function TenderProvider({ children }: { children: React.ReactNode }) {
   const [hydrated, setHydrated] = useState(false)
-  const [loggedIn, setLoggedIn] = useState(true)
+  const [loggedIn, setLoggedIn] = useState(false)
   const [loading, setLoading] = useState(false)
   const [supabaseConnected, setSupabaseConnected] = useState(false)
   const [supabaseHealth, setSupabaseHealth] = useState<SupabaseHealthStatus | null>(null)
@@ -118,8 +100,8 @@ export function TenderProvider({ children }: { children: React.ReactNode }) {
   const [masters, setMasters] = useState<Masters>(defaultMasters)
   const [selfAccounts, setSelfAccounts] = useState<BankAccountDetails[]>([])
   const [companyDocs, setCompanyDocs] = useState<CompanyMasterDocuments>({})
-  const [users, setUsers] = useState<AppUser[]>(() => getStoredLocalUsers())
-  const [currentUser, setCurrentUser] = useState<AppUser | null>(() => getStoredCurrentUser())
+  const [users, setUsers] = useState<AppUser[]>([])
+  const [currentUser, setCurrentUser] = useState<AppUser | null>(null)
   const [toast, setToast] = useState('')
 
   const notify = (msg: string) => {
@@ -134,31 +116,12 @@ export function TenderProvider({ children }: { children: React.ReactNode }) {
     return health
   }, [])
 
-  // Immediate LocalStorage recovery on initial client load
+  // 1. Thoroughly wipe all legacy LocalStorage data caches on client load
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const raw = window.localStorage.getItem(STORAGE_KEY)
-        if (raw) {
-          const parsed = JSON.parse(raw)
-          if (Array.isArray(parsed.tenders) && parsed.tenders.length > 0) {
-            setTenders(parsed.tenders)
-          }
-          if (parsed.masters) setMasters(parsed.masters)
-          if (Array.isArray(parsed.selfAccounts) && parsed.selfAccounts.length > 0) {
-            setSelfAccounts(parsed.selfAccounts)
-          }
-          if (parsed.companyDocs) {
-            setCompanyDocs(parsed.companyDocs)
-          }
-        }
-      } catch (err) {
-        console.warn('Initial localStorage restore error:', err)
-      }
-    }
+    clearAllLocalApplicationStorage()
   }, [])
 
-  // Load from Supabase Database on initial mount and keep in sync
+  // 2. Load all entities directly from Supabase Database on initial mount and keep in sync
   const refreshFromDatabase = useCallback(async () => {
     try {
       setLoading(true)
@@ -176,35 +139,35 @@ export function TenderProvider({ children }: { children: React.ReactNode }) {
         fetchMastersFromSupabase().catch(() => defaultMasters),
         fetchSelfAccountsFromSupabase().catch(() => []),
         fetchCompanyDocsFromSupabase().catch(() => ({})),
-        fetchUsersFromSupabase().catch(() => getStoredLocalUsers()),
+        fetchUsersFromSupabase().catch(() => []),
       ])
 
       if (dbMasters) setMasters(dbMasters)
-      if (Array.isArray(dbAccounts) && dbAccounts.length > 0) setSelfAccounts(dbAccounts)
-      if (dbCompanyDocs && Object.keys(dbCompanyDocs).length > 0) {
-        setCompanyDocs(prev => {
-          const merged = { ...prev, ...dbCompanyDocs }
-          syncToLocalStorage({ companyDocs: merged })
-          return merged
-        })
-      }
+      if (Array.isArray(dbAccounts)) setSelfAccounts(dbAccounts)
+      if (dbCompanyDocs) setCompanyDocs(dbCompanyDocs)
 
       if (Array.isArray(dbUsers) && dbUsers.length > 0) {
         setUsers(dbUsers)
-        saveStoredLocalUsers(dbUsers)
-        setCurrentUser(prev => {
-          if (!prev) return dbUsers[0]
-          const found = dbUsers.find(u => u.id === prev.id || u.username === prev.username)
-          return found || prev
-        })
+
+        // Session re-validation directly from Supabase
+        const sessionUserId = getSessionUserId()
+        if (sessionUserId) {
+          const matchedUser = dbUsers.find(u => u.id === sessionUserId && u.isActive)
+          if (matchedUser) {
+            setCurrentUser(matchedUser)
+            setLoggedIn(true)
+          } else {
+            clearSessionUser()
+            setCurrentUser(null)
+            setLoggedIn(false)
+          }
+        }
       }
 
       if (Array.isArray(dbTenders)) {
         setTenders(dbTenders)
-        syncToLocalStorage({ tenders: dbTenders, masters: dbMasters, selfAccounts: dbAccounts })
       } else {
-        // Fetch failed/returned null - preserve existing in-memory and local storage
-        console.warn('Supabase tenders fetch returned null, preserving existing tenders.')
+        console.warn('Supabase tenders fetch returned null.')
       }
     } catch (err) {
       console.error('Failed to load data from Supabase:', err)
@@ -219,7 +182,7 @@ export function TenderProvider({ children }: { children: React.ReactNode }) {
     refreshFromDatabase()
 
     // Realtime Supabase Channel Subscription for Tenders
-    const channel = supabase
+    const tendersChannel = supabase
       .channel('realtime:tenders')
       .on(
         'postgres_changes',
@@ -229,18 +192,43 @@ export function TenderProvider({ children }: { children: React.ReactNode }) {
             .then(dbTenders => {
               if (Array.isArray(dbTenders)) {
                 setTenders(dbTenders)
-                syncToLocalStorage({ tenders: dbTenders })
               }
             })
             .catch(err => {
-              console.warn('Realtime fetch ignored error:', err)
+              console.warn('Realtime tenders fetch ignored error:', err)
+            })
+        }
+      )
+      .subscribe()
+
+    // Realtime Supabase Channel Subscription for app_users
+    const usersChannel = supabase
+      .channel('realtime:app_users')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'app_users' },
+        () => {
+          fetchUsersFromSupabase()
+            .then(dbUsers => {
+              if (Array.isArray(dbUsers)) {
+                setUsers(dbUsers)
+                setCurrentUser(prev => {
+                  if (!prev) return prev
+                  const updated = dbUsers.find(u => u.id === prev.id)
+                  return updated || prev
+                })
+              }
+            })
+            .catch(err => {
+              console.warn('Realtime users fetch ignored error:', err)
             })
         }
       )
       .subscribe()
 
     return () => {
-      supabase.removeChannel(channel)
+      supabase.removeChannel(tendersChannel)
+      supabase.removeChannel(usersChannel)
     }
   }, [refreshFromDatabase])
 
@@ -270,53 +258,27 @@ export function TenderProvider({ children }: { children: React.ReactNode }) {
     usernameOrEmail?: string,
     password?: string
   ): Promise<{ success: boolean; error?: string }> => {
-    if (!usernameOrEmail) {
-      const adminUser = users.find(u => u.isPrimaryAdmin) || users[0] || null
-      setCurrentUser(adminUser)
-      saveStoredCurrentUser(adminUser)
+    try {
+      const authResult = await authenticateUserDirectly(usernameOrEmail, password)
+      if (!authResult.success || !authResult.user) {
+        return { success: false, error: authResult.error || 'Authentication failed. Please check credentials.' }
+      }
+
+      const authUser = authResult.user
+      setCurrentUser(authUser)
+      setSessionUserId(authUser.id)
       setLoggedIn(true)
-      notify(adminUser ? `Signed in as ${adminUser.username} (${adminUser.role})` : 'Signed in successfully')
+      notify(`Welcome back, ${authUser.username}! (${authUser.role})`)
       return { success: true }
+    } catch (err: any) {
+      console.error('Direct database login error:', err)
+      return { success: false, error: err?.message || 'Login failed. Please check credentials.' }
     }
-
-    const trimmed = usernameOrEmail.trim().toLowerCase()
-    const targetUser = users.find(
-      u => u.username.toLowerCase() === trimmed || (u.email && u.email.toLowerCase() === trimmed)
-    )
-
-    if (!targetUser) {
-      if (trimmed === 'admin' || trimmed === 'admin@company.com') {
-        const adminUser = users.find(u => u.isPrimaryAdmin) || users[0]
-        setCurrentUser(adminUser)
-        saveStoredCurrentUser(adminUser)
-        setLoggedIn(true)
-        notify(`Signed in as Administrator`)
-        return { success: true }
-      }
-      return { success: false, error: 'User does not exist. Please check your username or email.' }
-    }
-
-    if (!targetUser.isActive) {
-      return { success: false, error: 'This account has been deactivated. Contact an administrator.' }
-    }
-
-    if (password) {
-      const isMatch = await verifyPassword(password, targetUser.passwordHash)
-      const isDemoMatch =
-        (password === 'admin123' || password === 'admin') && targetUser.role === 'Administrator'
-      if (!isMatch && !isDemoMatch) {
-        return { success: false, error: 'Invalid password. Please try again.' }
-      }
-    }
-
-    setCurrentUser(targetUser)
-    saveStoredCurrentUser(targetUser)
-    setLoggedIn(true)
-    notify(`Welcome back, ${targetUser.username}! (${targetUser.role})`)
-    return { success: true }
   }
 
   const logout = () => {
+    clearSessionUser()
+    setCurrentUser(null)
     setLoggedIn(false)
     notify('You have been logged out')
   }
@@ -333,11 +295,13 @@ export function TenderProvider({ children }: { children: React.ReactNode }) {
 
     const rawPassword = userData.password || 'User@123'
     const passwordHash = await hashPassword(rawPassword)
+    const storedPasswordHash = encodeStoredPassword(passwordHash, rawPassword)
 
     const newUser: AppUser = {
       id: `usr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       username: usernameClean,
-      passwordHash,
+      passwordHash: storedPasswordHash,
+      passwordPlain: rawPassword,
       mobileNumber: userData.mobileNumber?.trim() || '',
       email: userData.email?.trim().toLowerCase() || '',
       role: userData.role || 'Tender Executive',
@@ -347,15 +311,11 @@ export function TenderProvider({ children }: { children: React.ReactNode }) {
       createdAt: new Date().toISOString(),
     }
 
-    const nextUsers = [...users, newUser]
-    setUsers(nextUsers)
-    saveStoredLocalUsers(nextUsers)
+    // Direct database persistence
+    await saveUserToSupabase(newUser)
 
-    saveUserToSupabase(newUser).catch(err => {
-      console.warn('Supabase saveUser error:', err)
-    })
-
-    notify(`User "${newUser.username}" created successfully`)
+    setUsers(prev => [...prev, newUser])
+    notify(`User "${newUser.username}" created successfully in Database`)
     return newUser
   }
 
@@ -376,8 +336,12 @@ export function TenderProvider({ children }: { children: React.ReactNode }) {
     }
 
     let newPasswordHash = current.passwordHash
+    let newPasswordPlain = current.passwordPlain
     if (updates.password && updates.password.trim()) {
-      newPasswordHash = await hashPassword(updates.password.trim())
+      const raw = updates.password.trim()
+      const rawHash = await hashPassword(raw)
+      newPasswordHash = encodeStoredPassword(rawHash, raw)
+      newPasswordPlain = raw
     }
 
     const isPrimary = current.isPrimaryAdmin
@@ -385,6 +349,7 @@ export function TenderProvider({ children }: { children: React.ReactNode }) {
       ...current,
       username: updates.username ? updates.username.trim() : current.username,
       passwordHash: newPasswordHash,
+      passwordPlain: newPasswordPlain,
       mobileNumber: updates.mobileNumber !== undefined ? updates.mobileNumber.trim() : current.mobileNumber,
       email: updates.email !== undefined ? updates.email.trim().toLowerCase() : current.email,
       role: isPrimary ? 'Administrator' : updates.role || current.role,
@@ -393,21 +358,21 @@ export function TenderProvider({ children }: { children: React.ReactNode }) {
       updatedAt: new Date().toISOString(),
     }
 
-    const nextUsers = [...users]
-    nextUsers[existingIndex] = updatedUser
-    setUsers(nextUsers)
-    saveStoredLocalUsers(nextUsers)
+    // Direct database persistence
+    await saveUserToSupabase(updatedUser)
+
+    setUsers(prev => {
+      const next = [...prev]
+      const idx = next.findIndex(u => u.id === id)
+      if (idx !== -1) next[idx] = updatedUser
+      return next
+    })
 
     if (currentUser?.id === id) {
       setCurrentUser(updatedUser)
-      saveStoredCurrentUser(updatedUser)
     }
 
-    saveUserToSupabase(updatedUser).catch(err => {
-      console.warn('Supabase updateUser error:', err)
-    })
-
-    notify(`User "${updatedUser.username}" updated successfully`)
+    notify(`User "${updatedUser.username}" updated successfully in Database`)
     return updatedUser
   }
 
@@ -425,15 +390,11 @@ export function TenderProvider({ children }: { children: React.ReactNode }) {
       throw new Error('You cannot delete your own active account.')
     }
 
-    const nextUsers = users.filter(u => u.id !== id)
-    setUsers(nextUsers)
-    saveStoredLocalUsers(nextUsers)
+    // Direct database persistence
+    await deleteUserFromSupabase(id)
 
-    deleteUserFromSupabase(id).catch(err => {
-      console.warn('Supabase deleteUser error:', err)
-    })
-
-    notify(`User "${target.username}" deleted successfully`)
+    setUsers(prev => prev.filter(u => u.id !== id))
+    notify(`User "${target.username}" deleted successfully from Database`)
     return true
   }
 
@@ -461,10 +422,9 @@ export function TenderProvider({ children }: { children: React.ReactNode }) {
       delay_days: 0,
     }
 
-    // Synchronous optimistic update to state AND localStorage immediately
+    // Optimistic in-memory update
     setTenders(prev => {
       const updated = [newTender, ...prev.filter(t => t.id !== newTender.id)]
-      syncToLocalStorage({ tenders: updated })
       return updated
     })
 
@@ -495,7 +455,6 @@ export function TenderProvider({ children }: { children: React.ReactNode }) {
         }
         return t
       })
-      syncToLocalStorage({ tenders: updated })
       return updated
     })
 
@@ -517,7 +476,6 @@ export function TenderProvider({ children }: { children: React.ReactNode }) {
   const deleteTender = (id: string) => {
     setTenders(prev => {
       const updated = prev.filter(t => t.id !== id)
-      syncToLocalStorage({ tenders: updated })
       return updated
     })
     notify(`Tender ${id} deleted`)
@@ -555,7 +513,6 @@ export function TenderProvider({ children }: { children: React.ReactNode }) {
         }
         return updatedTender
       })
-      syncToLocalStorage({ tenders: updated })
       return updated
     })
 
@@ -584,7 +541,6 @@ export function TenderProvider({ children }: { children: React.ReactNode }) {
       } else {
         updated = [...prev, account]
       }
-      syncToLocalStorage({ selfAccounts: updated })
       return updated
     })
 
@@ -604,7 +560,6 @@ export function TenderProvider({ children }: { children: React.ReactNode }) {
   const deleteSelfAccount = (accountNo: string) => {
     setSelfAccounts(prev => {
       const updated = prev.filter(a => a.accountNo !== accountNo)
-      syncToLocalStorage({ selfAccounts: updated })
       return updated
     })
     notify('Removing account...')
@@ -622,7 +577,6 @@ export function TenderProvider({ children }: { children: React.ReactNode }) {
   const saveCompanyDoc = (key: keyof CompanyMasterDocuments, doc: CompanyDocumentItem | null) => {
     setCompanyDocs(prev => {
       const updated = { ...prev, [key]: doc }
-      syncToLocalStorage({ companyDocs: updated })
       return updated
     })
 

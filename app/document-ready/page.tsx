@@ -115,6 +115,21 @@ export default function DocumentReadyPage() {
   }, [tab, pendingTenders, completedTenders, tenders, query, dossiersByTenderId])
 
   const handleAdvanceToNextStage = (t: Tender) => {
+    const updated: Tender = {
+      ...t,
+      portalUpload: {
+        ...(t.portalUpload || { documents: [] }),
+        checklist: t.documentReady?.checklist || t.portalUpload?.checklist,
+        checklistSource: t.documentReady?.checklistTitle || t.portalUpload?.checklistSource,
+        documents: [
+          ...(t.portalUpload?.documents || []),
+          ...(t.documentReady?.checklistDocs || []).filter(
+            cd => !(t.portalUpload?.documents || []).some(pd => pd.fieldKey === cd.fieldKey)
+          ),
+        ],
+      },
+    }
+    updateTender(t.id, updated)
     advanceStage(
       t.id,
       'Document Upload in portal',
@@ -221,6 +236,7 @@ export default function DocumentReadyPage() {
                   <th className="action-col">Action</th>
                   <th>Tender</th>
                   <th>Total Docs Fetched</th>
+                  <th>Tender Checklist Requirements</th>
                   <th>Stage 1 & 2 (Notice / Corrigendum)</th>
                   <th>Stage 3 (Eligibility Docs)</th>
                   <th>Stage 4 (Sample Docs)</th>
@@ -299,6 +315,29 @@ export default function DocumentReadyPage() {
                           <span className="font-bold text-slate-900 text-xs px-2.5 py-1 rounded-full bg-blue-50 text-blue-800 border border-blue-200 whitespace-nowrap flex items-center gap-1">
                             <Layers className="w-3 h-3 text-blue-600" />
                             {total} Documents
+                          </span>
+                        </div>
+                      </td>
+
+                      {/* 3b. Tender Checklist Requirements (Dynamic from PDF) */}
+                      <td>
+                        <div className="min-w-[160px] max-w-[220px] flex flex-col gap-1">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-bold text-xs text-blue-900 bg-blue-100/90 px-2.5 py-0.5 rounded-full flex items-center gap-1">
+                              📋 {dossier?.totalChecklistCount || 0} Required
+                            </span>
+                            <span
+                              className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                                (dossier?.attachedChecklistCount || 0) >= (dossier?.totalChecklistCount || 1)
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : 'bg-amber-100 text-amber-900'
+                              }`}
+                            >
+                              {dossier?.attachedChecklistCount || 0} Attached
+                            </span>
+                          </div>
+                          <span className="text-[10px] text-slate-500 truncate" title={dossier?.checklistTitle}>
+                            {dossier?.checklistTitle || 'Checklist of Documents to be Uploaded'}
                           </span>
                         </div>
                       </td>

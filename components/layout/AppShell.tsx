@@ -27,10 +27,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [loginError, setLoginError] = useState<string | null>(null)
   const [loginLoading, setLoginLoading] = useState(false)
 
-  // Load sidebar collapsed preference from localStorage
+  // Load sidebar collapsed preference from sessionStorage
   useEffect(() => {
     try {
-      const saved = localStorage.getItem('tender_fms_sidebar_collapsed')
+      const saved = sessionStorage.getItem('tender_fms_sidebar_collapsed')
       if (saved === 'true') {
         setSidebarCollapsed(true)
       }
@@ -43,7 +43,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     setSidebarCollapsed(prev => {
       const next = !prev
       try {
-        localStorage.setItem('tender_fms_sidebar_collapsed', String(next))
+        sessionStorage.setItem('tender_fms_sidebar_collapsed', String(next))
       } catch (e) {
         // ignore
       }
