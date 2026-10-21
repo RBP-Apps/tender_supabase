@@ -1,7 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Produces a self-contained .next/standalone server for the Docker image.
-  output: 'standalone',
+  // Only produce standalone for Docker builds, NOT for Vercel (Vercel uses its own serverless NFT tracing)
+  ...(process.env.VERCEL ? {} : { output: 'standalone' }),
   typescript: {
     ignoreBuildErrors: true,
   },

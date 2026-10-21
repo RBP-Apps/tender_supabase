@@ -177,9 +177,9 @@ export async function POST(request: Request) {
       path.join(process.cwd(), 'public', 'docs', 'ROTOMAG_Final_Submission_Checklist.pdf'),
     ]
     for (const p of candidatePaths) {
-      if (fs.existsSync(p)) {
+      if (fs.existsSync(/*turbopackIgnore: true*/ p)) {
         try {
-          const buf = fs.readFileSync(p)
+          const buf = fs.readFileSync(/*turbopackIgnore: true*/ p)
           pdfData = new Uint8Array(buf)
           fileName = path.basename(p)
           break
