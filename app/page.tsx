@@ -117,7 +117,7 @@ export default function DashboardPage() {
         <div className="card">
           <div className="card-head">
             <div>
-              <h2>Tender Pipeline (8 Stages)</h2>
+              <h2>Tender Pipeline ({stagesList.length} Stages)</h2>
               <p>Stage-by-stage distribution</p>
             </div>
             <Link href="/tender-details" className="text-link">

@@ -1,15 +1,15 @@
 'use client'
 
-import React, { useEffect } from 'react'
+import React, { useEffect, useMemo } from 'react'
 import {
   ChevronLeft,
   ChevronRight,
   Download,
-  ExternalLink,
   FileText,
   X,
 } from 'lucide-react'
 import { ROTOMAG_DOCUMENTS, RotomagDocItem } from '@/lib/rotomag-data'
+import { dataUrlToBlobUrl } from '@/lib/utils'
 
 interface RotomagModalProps {
   currentDoc: RotomagDocItem | null
@@ -34,6 +34,14 @@ export function RotomagModal({ currentDoc, onClose, onSelectDoc }: RotomagModalP
       document.body.style.overflow = previousOverflow
     }
   }, [currentDoc, onClose])
+
+  const safePdfSrc = useMemo(() => {
+    if (!currentDoc?.pdfUrl) return ''
+    if (currentDoc.pdfUrl.startsWith('data:')) {
+      return dataUrlToBlobUrl(currentDoc.pdfUrl)
+    }
+    return currentDoc.pdfUrl
+  }, [currentDoc?.pdfUrl])
 
   if (!currentDoc) return null
 
@@ -79,11 +87,7 @@ export function RotomagModal({ currentDoc, onClose, onSelectDoc }: RotomagModalP
                 <ChevronRight className="h-4 w-4" />
               </button>
             )}
-            <a href={currentDoc.pdfUrl} target="_blank" rel="noreferrer" className="secondary-button hidden text-xs sm:flex items-center gap-1.5">
-              <ExternalLink className="h-3.5 w-3.5" />
-              Open PDF
-            </a>
-            <a href={currentDoc.pdfUrl} download={currentDoc.fileName} className="secondary-button hidden text-xs sm:flex items-center gap-1.5">
+            <a href={safePdfSrc} download={currentDoc.fileName} className="secondary-button hidden text-xs sm:flex items-center gap-1.5">
               <Download className="h-3.5 w-3.5" />
               Download
             </a>
@@ -97,7 +101,7 @@ export function RotomagModal({ currentDoc, onClose, onSelectDoc }: RotomagModalP
           <div className="h-full w-full overflow-hidden rounded-xl border border-slate-300 bg-white shadow-sm">
             <iframe
               title={currentDoc.title}
-              src={`${currentDoc.pdfUrl}#page=1&view=FitH`}
+              src={`${safePdfSrc}#page=1&view=FitH`}
               className="h-full w-full"
             />
           </div>

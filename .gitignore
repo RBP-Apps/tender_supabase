@@ -16,3 +16,5 @@ node_modules
 tsconfig.tsbuildinfo
 AGENTS.md
 CLAUDE.md
+# pdf.js assets copied from node_modules by scripts/sync-pdfjs-assets.mjs
+/public/pdfjs

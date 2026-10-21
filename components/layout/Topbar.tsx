@@ -1,11 +1,14 @@
 'use client'
 
 import React from 'react'
+import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { Bell, ChevronDown, Menu } from 'lucide-react'
+import { Bell, ChevronDown, Database, Menu } from 'lucide-react'
+import { useTenders } from '@/context/TenderContext'
 
 const routeTitles: Record<string, string> = {
   '/': 'Dashboard',
+  '/tender-query': 'Tender Query',
   '/tender-details': 'Tender Details',
   '/eligibility-check': 'Eligibility Check',
   '/sample-details': 'Sample Details',
@@ -15,12 +18,16 @@ const routeTitles: Record<string, string> = {
   '/submit-in-website': 'Submit in website',
   '/technical-open-check': 'Technical Open Check',
   '/financial-open-check': 'Financial Open Check',
+  '/negotiation': 'Negotiation',
+  '/work-order': 'Work Order',
+  '/doc1': 'All Document',
   '/settings': 'Settings',
 }
 
 export function Topbar({ onOpenMobile }: { onOpenMobile: () => void }) {
   const pathname = usePathname()
   const title = routeTitles[pathname] || 'Tender FMS'
+  const { supabaseConnected } = useTenders()
 
   return (
     <header className="topbar">
@@ -39,7 +46,21 @@ export function Topbar({ onOpenMobile }: { onOpenMobile: () => void }) {
         </div>
       </div>
 
-      <div className="top-actions">
+      <div className="top-actions flex items-center gap-3">
+        <Link
+          href="/settings"
+          title="Supabase Cloud Database Status (Click to inspect)"
+          className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold border transition-all ${
+            supabaseConnected
+              ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+              : 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
+          }`}
+        >
+          <span className={`w-2 h-2 rounded-full ${supabaseConnected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
+          <Database className="w-3.5 h-3.5" />
+          <span>{supabaseConnected ? 'Supabase Live' : 'Supabase Connecting...'}</span>
+        </Link>
+
         <button className="icon-button" aria-label="Notifications">
           <Bell />
           <i />

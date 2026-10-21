@@ -140,9 +140,18 @@ export function RotomagCard({ doc, onOpenModal }: RotomagCardProps) {
             <button type="button" onClick={handleCopySummary} className="icon-button" title="Copy document summary" aria-label="Copy document summary">
               {copied ? <CheckCircle2 className="h-4 w-4 text-emerald-600" /> : <Copy className="h-4 w-4" />}
             </button>
-            <a href={doc.pdfUrl} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} className="icon-button" title="Open PDF in new tab" aria-label="Open PDF in new tab">
+            <button
+              type="button"
+              onClick={e => {
+                e.stopPropagation()
+                onOpenModal(doc)
+              }}
+              className="icon-button"
+              title="Open PDF (in current tab)"
+              aria-label="Open PDF in current tab"
+            >
               <ExternalLink className="h-4 w-4" />
-            </a>
+            </button>
             <a href={doc.pdfUrl} download={doc.fileName} onClick={e => e.stopPropagation()} className="icon-button" title="Download PDF" aria-label="Download PDF">
               <Download className="h-4 w-4" />
             </a>

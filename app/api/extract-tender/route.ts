@@ -12,9 +12,15 @@ const DEFAULT_MODEL = 'gpt-6-astra'
 
 const INSTRUCTIONS =
   'You extract structured data from Indian government tender documents (NIT / RfS / RFP / bid documents). ' +
-  'Read the whole PDF, including tables and corrigenda. Only report values the document actually states; use null ' +
-  '(or an empty array) for anything not present. Never guess. Convert every date to YYYY-MM-DD. Convert EMD amounts ' +
-  'to Rs. Lakh (e.g. Rs. 92,00,000 = 92). Only report beneficiary bank details that belong to the authority (the payee).'
+  'Read the entire uploaded tender PDF, including all tables, annexures, eligibility criteria, financial conditions, technical specifications, and corrigenda. ' +
+  'Only report values the document actually states; use null (or an empty array) for anything not present. Never guess, invent, or insert sample data. ' +
+  'Convert every date to YYYY-MM-DD. Convert EMD amounts to Rs. Lakh (e.g. Rs. 92,00,000 = 92). Only report beneficiary bank details that belong to the authority (the payee). ' +
+  'For GST Section: automatically extract applicable GST rates, GST amounts, and relevant GST conditions for the tender fee and contract with appropriate context. ' +
+  'For Tender Fee + GST: calculate Total = Tender Fee + Applicable GST Amount. If the document states fee is inclusive of GST, use that amount without adding GST again. Clearly distinguish base tender fee, GST amount, and total amount. Do not assume a GST rate if not specified in the document. ' +
+  'For Test Report Compliance: provide a concise 3-5 line summary of exact test report requirements, standards (IS/IEC), accredited labs (NABL), report validity, and compliance conditions. ' +
+  'For MAF Requirement: provide a concise 3-5 line summary of Manufacturer Authorization Form format, eligibility, validity, signatures/stamps, or "Not Required" if the document confirms this. ' +
+  'For Experience Filed (Exact Requirement): preserve exact wording, numbers, percentages, project values, and eligibility conditions verbatim from the tender clauses. ' +
+  'For Turn Over (Turnover): preserve exact turnover criteria verbatim, distinguishing average annual turnover (MAAT) from individual year requirements.'
 
 export async function POST(request: Request) {
   const apiKey = process.env.OPENAI_API_KEY

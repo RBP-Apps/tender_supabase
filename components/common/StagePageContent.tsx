@@ -112,7 +112,7 @@ export function StagePageContent({
         <TenderTable
           tenders={filtered}
           onProcess={t => setModal({ mode: 'process', tender: t })}
-          onEdit={t => setModal({ mode: 'edit', tender: t })}
+          onEdit={tab === 'completed' ? (t => setModal({ mode: 'edit', tender: t })) : undefined}
           onDelete={id => {
             if (window.confirm('Delete this tender record?')) {
               deleteTender(id)

@@ -13,6 +13,12 @@ export const emptyBid = (): TenderBidDetails => ({
   authorityAddress: '',
   bidDeadlineTime: '',
   tenderFeePerPackage: '',
+  gstSection: '',
+  tenderFeePlusGst: '',
+  testReportCompliance: '',
+  mafRequirement: '',
+  experienceRequirement: '',
+  turnoverRequirement: '',
   bidValidityDays: '180',
   financialRequirementCr: '',
   technicalRequirement: '',
@@ -79,6 +85,16 @@ export const SAMPLE_TENDER: Tender = {
     authorityAddress: '4th Floor, Sewa Bhawan, Danganiya, Raipur – 492013 (C.G.)',
     bidDeadlineTime: '15:00 Hrs.',
     tenderFeePerPackage: '10,000',
+    gstSection: '18% GST applicable on tender fee (₹ 1,800). Works contract GST applicable extra as per statutory rates.',
+    tenderFeePlusGst: '₹ 11,800 (Base: ₹ 10,000 + 18% GST: ₹ 1,800)',
+    testReportCompliance:
+      'Type test reports from NABL/BIS accredited laboratories as per IS 14286 / IEC 61215 and IEC 61730-1,2 for Solar PV Modules. Inverter compliance certificates as per IEC 61683 and IEC 60068-2. Valid as on date of bid opening.',
+    mafRequirement:
+      'Manufacturer Authorization Form (MAF) in prescribed Format-11 from OEM for Solar PV Modules and PCU/Inverter, duly signed and stamped by OEM authorized signatory with warranty commitment.',
+    experienceRequirement:
+      'Bidder must have installed and commissioned grid-connected solar rooftop plants having cumulative capacity not less than 60,100 kWp or 10,000 installations in government or private sectors in last 5 financial years. Satisfactory commissioning certificates required.',
+    turnoverRequirement:
+      'Minimum Average Annual Turnover (MAAT) of ₹ 301.00 Crore during last 3 financial years (FY 2021-22, 2022-23, and 2023-24). Audited balance sheets, profit & loss statements, and CA Certificate with UDIN required.',
     bidValidityDays: '180',
     financialRequirementCr: '301.00',
     technicalRequirement: '60,100 kWp OR 10,000 installations',

@@ -50,6 +50,37 @@ export const tenderExtractionSchema = z.object({
   bidDeadlineDate: nullableText('Last date of bid submission, formatted YYYY-MM-DD'),
   bidDeadlineTime: nullableText('Bid submission deadline time, e.g. "15:00 Hrs."'),
   tenderFeePerPackage: nullableText('Tender / processing fee per package in rupees, digits with commas, e.g. "10,000"'),
+  gstSection: nullableText(
+    'Applicable GST rate, GST amount, and other relevant GST conditions specified for tender fee and contract. ' +
+    'If multiple GST rates or conditions are mentioned, capture them accurately with appropriate context. ' +
+    'Null if not mentioned in the tender document.'
+  ),
+  tenderFeePlusGst: nullableText(
+    'Automatically calculated total tender fee including GST using formula: Total Tender Fee = Tender Fee + Applicable GST Amount. ' +
+    'If the tender specifies an inclusive amount, use that amount without adding GST again. ' +
+    'Do not assume a GST rate if not specified in document. Clearly distinguish base tender fee, GST amount, and total amount ' +
+    '(e.g. "₹ 11,800 (Base: ₹ 10,000 + 18% GST: ₹ 1,800)"). Null if tender fee is not found.'
+  ),
+  testReportCompliance: nullableText(
+    'Concise summary of approximately 3-5 lines of exact test report requirements: ' +
+    'required test reports, applicable standards (IS/IEC), testing authority or laboratory requirements (e.g. NABL/BIS accredited), ' +
+    'report validity, and compliance conditions. Do not omit mandatory requirements or invent missing details. Null if not mentioned.'
+  ),
+  mafRequirement: nullableText(
+    'Concise summary of approximately 3-5 lines of Manufacturer Authorization Form (MAF) requirements: ' +
+    'manufacturer authorization requirements, prescribed format, manufacturer eligibility, validity, signatures, stamps, ' +
+    'and submission conditions. If MAF is not required, explicitly report "Not Required" only when clearly confirmed. Null if not mentioned.'
+  ),
+  experienceRequirement: nullableText(
+    'Exact experience eligibility requirements preserved verbatim from the tender document as much as possible. ' +
+    'Include required years of experience, completed or ongoing work conditions, similar-work criteria, required project values, ' +
+    'completion certificates, and documentary proof. Preserve all important numbers, dates, amounts, percentages, and conditions.'
+  ),
+  turnoverRequirement: nullableText(
+    'Exact turnover requirements preserved verbatim from the tender document. ' +
+    'Capture minimum annual turnover, average turnover (MAAT), required financial years, amount, currency, CA certification, ' +
+    'audited financial statements, and supporting documents. Preserve original conditions and distinguish average vs individual year turnover.'
+  ),
   bidValidityDays: nullableText('Bid validity period in days, digits only'),
   financialRequirementCr: nullableText('Cumulative financial eligibility requirement (turnover/MAAT/net worth) in Rs. Crore, digits only'),
   technicalRequirement: nullableText('Cumulative technical eligibility requirement, short phrase, e.g. "60,100 kWp OR 10,000 installations"'),
