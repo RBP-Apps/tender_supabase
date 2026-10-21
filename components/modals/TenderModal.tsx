@@ -31,7 +31,7 @@ import {
   TenderPackage,
   TechnicalComponent,
 } from '@/types/tender'
-import { stagesList } from '@/context/TenderContext'
+import { stagesList, useTenders } from '@/context/TenderContext'
 import { emptyBid, missingDocFields } from '@/lib/tender-docs'
 import { TenderExtraction } from '@/lib/tender-extraction-schema'
 import { CorrigendumExtraction } from '@/lib/corrigendum-extraction-schema'
@@ -130,6 +130,7 @@ export function TenderModal({
   onClose,
   onSave,
 }: TenderModalProps) {
+  const { currentUser } = useTenders()
   const tender = tenderProp || initial
   const currentStageIndex = tender
     ? stagesList.findIndex(s => s.label === tender.stage)
@@ -145,13 +146,13 @@ export function TenderModal({
       id: '',
       title: '',
       authority: '',
-      department: masters.departments[0] || 'Public Works',
-      state: masters.states[0] || 'Madhya Pradesh',
+      department: masters.departments[0] || '',
+      state: masters.states[0] || '',
       value: '',
       stage: 'Eligibility Check',
       status: 'In Progress',
       due: new Date().toISOString().slice(0, 10),
-      owner: 'Admin',
+      owner: currentUser?.username || '',
       remarks: '',
       bid: emptyBid(),
     }

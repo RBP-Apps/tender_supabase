@@ -165,11 +165,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 {loginLoading ? 'Signing in...' : 'Sign in to Workspace'} <ArrowRight className="w-4 h-4" />
               </button>
             </form>
-            <div className="mt-6 p-3 bg-slate-50 border border-slate-200 rounded-xl text-center">
-              <p className="text-[11px] text-slate-500">
-                Default Admin: <strong className="text-slate-800">admin</strong> · Password: <strong className="text-slate-800">admin123</strong>
-              </p>
-            </div>
           </div>
         </section>
       </main>

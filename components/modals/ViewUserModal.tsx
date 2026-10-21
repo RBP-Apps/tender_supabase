@@ -128,7 +128,7 @@ export function ViewUserModal({ user, onClose, onEdit }: ViewUserModalProps) {
                 </button>
               </div>
               <p className="font-mono text-slate-800 text-xs font-semibold">
-                {showPassword ? (user.passwordPlain || '••••••••') : '••••••••'}
+                {showPassword ? (user.passwordPlain || '•••••••• (Encrypted in Database)') : '••••••••'}
               </p>
             </div>
 

@@ -53,15 +53,7 @@ export function UserModal({ mode, user, onClose, onSave }: UserModalProps) {
   const isEdit = mode === 'edit'
   const isPrimaryAdmin = !!user?.isPrimaryAdmin
 
-  const fallbackPassword =
-    user?.username === 'admin'
-      ? 'admin123'
-      : user?.username === 'rajesh.verma'
-      ? 'manager123'
-      : user?.username === 'priya.singh'
-      ? 'exec123'
-      : 'User@123'
-  const initialPassword = user?.passwordPlain || fallbackPassword
+  const initialPassword = user?.passwordPlain || ''
 
   const [username, setUsername] = useState(user?.username || '')
   const [password, setPassword] = useState(initialPassword)
@@ -73,7 +65,7 @@ export function UserModal({ mode, user, onClose, onSave }: UserModalProps) {
 
   useEffect(() => {
     if (user) {
-      const pass = user.passwordPlain || fallbackPassword || 'User@123'
+      const pass = user.passwordPlain || ''
       setUsername(user.username || '')
       setPassword(pass)
       setMobileNumber(user.mobileNumber || '')
@@ -82,7 +74,7 @@ export function UserModal({ mode, user, onClose, onSave }: UserModalProps) {
       setIsActive(user.isActive ?? true)
       if (user.pageAccess) setPageAccess([...user.pageAccess])
     }
-  }, [user, fallbackPassword])
+  }, [user])
   const [pageAccess, setPageAccess] = useState<string[]>(() => {
     if (user?.pageAccess) return [...user.pageAccess]
     if (role === 'Administrator') return APP_MODULES.map(m => m.path)
@@ -266,7 +258,7 @@ export function UserModal({ mode, user, onClose, onSave }: UserModalProps) {
                     required
                     value={username}
                     onChange={e => setUsername(e.target.value)}
-                    placeholder="e.g. arjun.sharma"
+                    placeholder="Enter username"
                     disabled={isPrimaryAdmin}
                     className="w-full border border-slate-300 rounded-lg pl-9 pr-3 py-2 text-xs text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 disabled:bg-slate-100 disabled:text-slate-500"
                   />
@@ -281,7 +273,7 @@ export function UserModal({ mode, user, onClose, onSave }: UserModalProps) {
                 <div className="flex items-center justify-between mb-1">
                   <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
                     Password {!isEdit && <span className="text-red-500">*</span>}
-                    {isEdit && (
+                    {isEdit && user?.passwordPlain && (
                       <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
                         Previous Password Loaded
                       </span>
@@ -297,7 +289,7 @@ export function UserModal({ mode, user, onClose, onSave }: UserModalProps) {
                   </button>
                 </div>
 
-                {isEdit && (
+                {isEdit && user?.passwordPlain && (
                   <div className="mb-2.5 p-2.5 bg-blue-50/80 border border-blue-200 rounded-xl flex items-center justify-between">
                     <div>
                       <span className="text-[10px] font-bold text-blue-900 uppercase tracking-wider block">

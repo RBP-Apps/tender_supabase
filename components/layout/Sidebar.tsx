@@ -235,19 +235,19 @@ export function Sidebar({
             onMouseEnter={(e) =>
               handleMouseEnter(
                 e,
-                `${currentUser?.username || 'Arjun Sharma'} • ${currentUser?.role || 'Administrator'}`
+                `${currentUser?.username || 'User'} • ${currentUser?.role || 'Staff'}`
               )
             }
             onMouseLeave={handleMouseLeave}
           >
             <div className="avatar">
-              {(currentUser?.username || 'AS').slice(0, 2).toUpperCase()}
+              {(currentUser?.username || 'U').slice(0, 2).toUpperCase()}
             </div>
             <div className="profile-info">
-              <strong className="truncate block max-w-[130px]" title={currentUser?.username || 'Arjun Sharma'}>
-                {currentUser?.username || 'Arjun Sharma'}
+              <strong className="truncate block max-w-[130px]" title={currentUser?.username || 'User'}>
+                {currentUser?.username || 'User'}
               </strong>
-              <small className="truncate block max-w-[130px]">{currentUser?.role || 'Administrator'}</small>
+              <small className="truncate block max-w-[130px]">{currentUser?.role || 'Staff'}</small>
             </div>
           </div>
         </div>

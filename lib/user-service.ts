@@ -4,70 +4,8 @@ import { hashPassword, verifyPassword, extractPasswordInfo, encodeStoredPassword
 
 export const ALL_PAGE_PATHS = APP_MODULES.map(m => m.path)
 
-// Default seed users with pre-hashed passwords ('admin123' for admin, 'manager123', 'exec123')
-export const DEFAULT_USERS: AppUser[] = [
-  {
-    id: 'usr_admin_001',
-    username: 'admin',
-    passwordHash: '8e8749a46a6f1d52033bc699042b78b668d27b9c97b830720485a53be8880620', // admin123
-    passwordPlain: 'admin123',
-    mobileNumber: '+91 98765 43210',
-    email: 'admin@company.com',
-    role: 'Administrator',
-    pageAccess: ALL_PAGE_PATHS,
-    isActive: true,
-    isPrimaryAdmin: true,
-    createdAt: '2026-01-01T00:00:00.000Z',
-  },
-  {
-    id: 'usr_mgr_002',
-    username: 'rajesh.verma',
-    passwordHash: 'c4e4cbe778b05615d8525b6a3d90733c7f9ea93e3d484e511470404097f4803d', // manager123
-    passwordPlain: 'manager123',
-    mobileNumber: '+91 98123 45678',
-    email: 'rajesh@company.com',
-    role: 'Tender Manager',
-    pageAccess: [
-      '/',
-      '/tender-query',
-      '/tender-details',
-      '/eligibility-check',
-      '/sample-details',
-      '/emd-ready',
-      '/document-ready',
-      '/document-upload-in-portal',
-      '/submit-in-website',
-      '/technical-open-check',
-      '/financial-open-check',
-      '/negotiation',
-      '/work-order',
-      '/doc1',
-    ],
-    isActive: true,
-    createdAt: '2026-02-15T09:30:00.000Z',
-  },
-  {
-    id: 'usr_exec_003',
-    username: 'priya.singh',
-    passwordHash: 'f41753c150b001cbe6520ab3ec8fefcfca8df20b22a075306ec78465fc950ea6', // exec123
-    passwordPlain: 'exec123',
-    mobileNumber: '+91 98234 56789',
-    email: 'priya@company.com',
-    role: 'Tender Executive',
-    pageAccess: [
-      '/',
-      '/tender-details',
-      '/eligibility-check',
-      '/sample-details',
-      '/emd-ready',
-      '/document-ready',
-      '/document-upload-in-portal',
-      '/doc1',
-    ],
-    isActive: true,
-    createdAt: '2026-03-01T10:15:00.000Z',
-  },
-]
+// No hardcoded users: users are queried and maintained strictly in Supabase app_users table
+export const DEFAULT_USERS: AppUser[] = []
 
 /**
  * Wipes all legacy LocalStorage application caches from user browser
@@ -142,20 +80,12 @@ export function clearSessionUser(): void {
  */
 export function mapDbRowToAppUser(row: any): AppUser {
   const pwdInfo = extractPasswordInfo(row.password_hash)
-  const fallbackPlain =
-    row.username === 'admin'
-      ? 'admin123'
-      : row.username === 'rajesh.verma'
-      ? 'manager123'
-      : row.username === 'priya.singh'
-      ? 'exec123'
-      : 'User@123'
 
   return {
     id: row.id,
     username: row.username,
     passwordHash: row.password_hash || '',
-    passwordPlain: pwdInfo.plain || fallbackPlain,
+    passwordPlain: pwdInfo.plain || undefined,
     mobileNumber: row.mobile_number || '',
     email: row.email || '',
     role: row.role || 'Tender Executive',
@@ -173,7 +103,6 @@ export function mapDbRowToAppUser(row: any): AppUser {
 
 /**
  * Fetch all users directly from Supabase app_users table.
- * If database table is empty, auto-seeds default initial users directly into Supabase.
  */
 export async function fetchUsersFromSupabase(): Promise<AppUser[]> {
   try {
@@ -184,22 +113,17 @@ export async function fetchUsersFromSupabase(): Promise<AppUser[]> {
 
     if (error) {
       console.warn('Supabase app_users fetch notice:', error.message)
-      return DEFAULT_USERS
+      return []
     }
 
     if (data && data.length > 0) {
       return data.map(mapDbRowToAppUser)
     }
 
-    // Database table is empty - seed default users directly into Supabase
-    console.log('Seeding initial users directly into Supabase app_users table...')
-    for (const u of DEFAULT_USERS) {
-      await saveUserToSupabase(u).catch(() => {})
-    }
-    return DEFAULT_USERS
+    return []
   } catch (err) {
     console.error('fetchUsersFromSupabase exception:', err)
-    return DEFAULT_USERS
+    return []
   }
 }
 
@@ -250,20 +174,8 @@ export async function authenticateUserDirectly(
   password?: string
 ): Promise<{ success: boolean; user?: AppUser; error?: string }> {
   try {
-    // If no credentials provided (quick admin switch), query primary admin from Supabase
     if (!usernameOrEmail) {
-      const { data, error } = await supabase
-        .from('app_users')
-        .select('*')
-        .eq('is_primary_admin', true)
-        .limit(1)
-
-      if (!error && data && data.length > 0) {
-        return { success: true, user: mapDbRowToAppUser(data[0]) }
-      }
-
-      const all = await fetchUsersFromSupabase()
-      return { success: true, user: all[0] || DEFAULT_USERS[0] }
+      return { success: false, error: 'Username or email is required.' }
     }
 
     const clean = usernameOrEmail.trim().toLowerCase()
@@ -277,21 +189,10 @@ export async function authenticateUserDirectly(
 
     if (error) {
       console.error('Supabase authentication query error:', error.message)
-      // Fallback check against in-memory default users if database table isn't migrated yet
-      const fallbackUser = DEFAULT_USERS.find(
-        u => u.username.toLowerCase() === clean || (u.email && u.email.toLowerCase() === clean)
-      )
-      if (fallbackUser) {
-        return { success: true, user: fallbackUser }
-      }
       return { success: false, error: 'Database connection error: ' + error.message }
     }
 
     if (!data || data.length === 0) {
-      // Check default fallback admin
-      if (clean === 'admin' || clean === 'admin@company.com') {
-        return { success: true, user: DEFAULT_USERS[0] }
-      }
       return { success: false, error: 'User does not exist in database. Please check username or email.' }
     }
 
@@ -303,9 +204,7 @@ export async function authenticateUserDirectly(
 
     if (password) {
       const isMatch = await verifyPassword(password, targetUser.passwordHash)
-      const isDemoMatch =
-        (password === 'admin123' || password === 'admin') && targetUser.role === 'Administrator'
-      if (!isMatch && !isDemoMatch) {
+      if (!isMatch) {
         return { success: false, error: 'Invalid password. Please check your password.' }
       }
     }
@@ -319,7 +218,7 @@ export async function authenticateUserDirectly(
 
 // Backwards compatibility helpers (purely in-memory, NO localStorage writes!)
 export function getStoredLocalUsers(): AppUser[] {
-  return DEFAULT_USERS
+  return []
 }
 
 export function saveStoredLocalUsers(_users: AppUser[]): void {
@@ -327,7 +226,7 @@ export function saveStoredLocalUsers(_users: AppUser[]): void {
 }
 
 export function getStoredCurrentUser(): AppUser | null {
-  return DEFAULT_USERS[0]
+  return null
 }
 
 export function saveStoredCurrentUser(_user: AppUser | null): void {

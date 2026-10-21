@@ -56,7 +56,7 @@ function dueLabel(date: string) {
 }
 
 export default function DocumentReadyPage() {
-  const { tenders, updateTender, deleteTender, advanceStage, notify } = useTenders()
+  const { tenders, masters, updateTender, deleteTender, advanceStage, notify } = useTenders()
   const router = useRouter()
   const [tab, setTab] = useState<'pending' | 'completed' | 'all'>('pending')
   const [query, setQuery] = useState('')
@@ -494,12 +494,7 @@ export default function DocumentReadyPage() {
         <TenderModal
           mode="edit"
           initial={editTender}
-          masters={{
-            states: ['Delhi', 'Maharashtra', 'Gujarat', 'Karnataka', 'Tamil Nadu', 'Chhattisgarh'],
-            departments: ['Energy', 'Irrigation', 'Transport', 'Public Works', 'CREDA', 'Water Resources'],
-            firms: ['Apex Builders', 'Zenith Infra', 'Horizon Power', 'Suntech Engineers'],
-            tenderTypes: ['Goods', 'Works', 'Services', 'Turnkey EPC'],
-          }}
+          masters={masters}
           onSave={updated => {
             updateTender(updated.id, updated)
             setEditTender(null)

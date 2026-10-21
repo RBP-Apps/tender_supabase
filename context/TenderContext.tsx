@@ -416,7 +416,7 @@ export function TenderProvider({ children }: { children: React.ReactNode }) {
     const newTender: Tender = {
       ...data,
       id: generatedId,
-      owner: data.owner || 'Admin',
+      owner: data.owner || currentUser?.username || 'User',
       createdAt: new Date().toISOString(),
       planned_date: data.planned_date || data.due || undefined,
       delay_days: 0,

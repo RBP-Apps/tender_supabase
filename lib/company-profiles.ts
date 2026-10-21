@@ -57,61 +57,6 @@ export const COMPANY_PROFILES: CompanyProfile[] = [
     logoText: 'ROTOMAG',
     logoType: 'rotomag',
   },
-  {
-    id: 'arjun-infra',
-    name: 'ARJUN INFRA PVT. LTD.',
-    formerName: 'Arjun Civil Engineering Works',
-    tagline: 'Excellence in Infrastructure & Engineering Construction',
-    cin: 'U45200DL2018PTC334512',
-    address: 'Plot No. 45, Okhla Industrial Area, Phase-III, New Delhi – 110020, India',
-    phone: '+91 11 41526370',
-    email: 'tenders@arjuninfra.com',
-    website: 'www.arjuninfra.com',
-    signatory: 'Mr. Rajesh Sharma',
-    signatoryDesignation: 'Director / Authorised Signatory',
-    pan: 'AAACA7890L',
-    gst: '07AAACA7890L1ZD',
-    brandColor: '#4f46e5', // Indigo-600
-    accentColor: '#f59e0b', // Amber-500
-    logoText: 'ARJUN',
-    logoType: 'standard',
-  },
-  {
-    id: 'sharma-projects',
-    name: 'SHARMA PROJECTS & INFRASTRUCTURE',
-    tagline: 'Delivering Quality Infrastructure Projects Across India',
-    cin: 'U45400MH2016PTC281903',
-    address: 'Commerce Center, Bandra-Kurla Complex, Mumbai – 400051, Maharashtra',
-    phone: '+91 22 67891234',
-    email: 'contact@sharmaprojects.in',
-    website: 'www.sharmaprojects.in',
-    signatory: 'Mr. Vipin Sharma',
-    signatoryDesignation: 'Partner / Authorised Signatory',
-    pan: 'AABCS5544R',
-    gst: '27AABCS5544R1Z5',
-    brandColor: '#0f766e', // Teal-700
-    accentColor: '#06b6d4', // Cyan-500
-    logoText: 'SHARMA',
-    logoType: 'standard',
-  },
-  {
-    id: 'apex-builders',
-    name: 'APEX BUILDERS & CONTRACTORS PVT. LTD.',
-    tagline: 'Precision Building & Civil Infrastructure Contractors',
-    cin: 'U70102GJ2015PTC083421',
-    address: 'Apex Tower, S.G. Highway, Ahmedabad – 380054, Gujarat, India',
-    phone: '+91 79 26859900',
-    email: 'bids@apexbuilders.co.in',
-    website: 'www.apexbuilders.co.in',
-    signatory: 'Mr. Kamlesh Patel',
-    signatoryDesignation: 'Managing Director',
-    pan: 'AABCA4321P',
-    gst: '24AABCA4321P1Z2',
-    brandColor: '#b91c1c', // Red-700
-    accentColor: '#f97316', // Orange-500
-    logoText: 'APEX',
-    logoType: 'standard',
-  },
 ]
 
 export const DEFAULT_COMPANY = COMPANY_PROFILES[0] // RBP ENERGY (INDIA) PVT. LTD.

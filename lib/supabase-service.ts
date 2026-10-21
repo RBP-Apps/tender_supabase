@@ -40,10 +40,10 @@ import { uploadToSupabaseBucket, STAGE_FOLDERS } from '@/lib/supabase-storage'
 // ====================================================================
 
 export const defaultMasters: Masters = {
-  states: ['Madhya Pradesh', 'Maharashtra', 'Rajasthan', 'Delhi', 'Gujarat', 'Uttar Pradesh', 'Karnataka'],
-  departments: ['Public Works', 'Urban Development', 'Energy', 'Water Resources', 'Health Department', 'Education'],
-  firms: ['Arjun Infra Pvt. Ltd.', 'Sharma Projects', 'Apex Builders'],
-  tenderTypes: ['Open Tender', 'Limited Tender', 'EOI', 'Global Tender'],
+  states: [],
+  departments: [],
+  firms: [],
+  tenderTypes: [],
 }
 
 export async function fetchMastersFromSupabase(): Promise<Masters> {
@@ -55,7 +55,6 @@ export async function fetchMastersFromSupabase(): Promise<Masters> {
       .order('sort_order', { ascending: true })
 
     if (error || !data || data.length === 0) {
-      console.warn('Could not fetch masters from Supabase or empty, using defaults:', error?.message)
       return defaultMasters
     }
 
@@ -73,12 +72,11 @@ export async function fetchMastersFromSupabase(): Promise<Masters> {
       }
     }
 
-    // Ensure no empty arrays if database has partial data
     return {
-      states: masters.states.length > 0 ? masters.states : defaultMasters.states,
-      departments: masters.departments.length > 0 ? masters.departments : defaultMasters.departments,
-      firms: masters.firms.length > 0 ? masters.firms : defaultMasters.firms,
-      tenderTypes: masters.tenderTypes.length > 0 ? masters.tenderTypes : defaultMasters.tenderTypes,
+      states: masters.states,
+      departments: masters.departments,
+      firms: masters.firms,
+      tenderTypes: masters.tenderTypes,
     }
   } catch (err) {
     console.error('fetchMastersFromSupabase error:', err)
