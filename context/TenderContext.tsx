@@ -91,6 +91,31 @@ function syncToLocalStorage(_data?: any) {
   // No-op: zero localStorage persistence
 }
 
+const COMPANY_DOCS_STORAGE_KEY = 'tender_fms_company_docs_vault'
+
+function loadLocalCompanyDocs(): CompanyMasterDocuments {
+  if (typeof window === 'undefined') return {}
+  try {
+    const raw = window.localStorage.getItem(COMPANY_DOCS_STORAGE_KEY)
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      if (parsed && typeof parsed === 'object') return parsed
+    }
+  } catch (e) {
+    // ignore
+  }
+  return {}
+}
+
+function persistLocalCompanyDocs(docs: CompanyMasterDocuments) {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(COMPANY_DOCS_STORAGE_KEY, JSON.stringify(docs))
+  } catch (e) {
+    // ignore
+  }
+}
+
 export function TenderProvider({ children }: { children: React.ReactNode }) {
   const [hydrated, setHydrated] = useState(false)
   const [loggedIn, setLoggedIn] = useState(false)
@@ -100,7 +125,7 @@ export function TenderProvider({ children }: { children: React.ReactNode }) {
   const [tenders, setTenders] = useState<Tender[]>([])
   const [masters, setMasters] = useState<Masters>(defaultMasters)
   const [selfAccounts, setSelfAccounts] = useState<BankAccountDetails[]>([])
-  const [companyDocs, setCompanyDocs] = useState<CompanyMasterDocuments>({})
+  const [companyDocs, setCompanyDocs] = useState<CompanyMasterDocuments>(loadLocalCompanyDocs)
   const [users, setUsers] = useState<AppUser[]>([])
   const [currentUser, setCurrentUser] = useState<AppUser | null>(null)
   const [toast, setToast] = useState('')
@@ -117,9 +142,13 @@ export function TenderProvider({ children }: { children: React.ReactNode }) {
     return health
   }, [])
 
-  // 1. Thoroughly wipe all legacy LocalStorage data caches on client load
+  // 1. Thoroughly wipe all legacy LocalStorage data caches on client load (exempting companyDocs vault)
   useEffect(() => {
     clearAllLocalApplicationStorage()
+    const local = loadLocalCompanyDocs()
+    if (local && Object.keys(local).length > 0) {
+      setCompanyDocs(prev => ({ ...local, ...prev }))
+    }
   }, [])
 
   // 2. Load all entities directly from Supabase Database on initial mount and keep in sync
@@ -145,7 +174,20 @@ export function TenderProvider({ children }: { children: React.ReactNode }) {
 
       if (dbMasters) setMasters(dbMasters)
       if (Array.isArray(dbAccounts)) setSelfAccounts(dbAccounts)
-      if (dbCompanyDocs) setCompanyDocs(dbCompanyDocs)
+
+      if (dbCompanyDocs && Object.keys(dbCompanyDocs).length > 0) {
+        setCompanyDocs(prev => {
+          const merged = { ...loadLocalCompanyDocs(), ...prev, ...dbCompanyDocs }
+          persistLocalCompanyDocs(merged)
+          return merged
+        })
+      } else {
+        // Fallback to local vault cache so uploaded documents never vanish if Supabase table is pending or empty
+        const local = loadLocalCompanyDocs()
+        if (local && Object.keys(local).length > 0) {
+          setCompanyDocs(prev => ({ ...prev, ...local }))
+        }
+      }
 
       if (Array.isArray(dbUsers) && dbUsers.length > 0) {
         setUsers(dbUsers)
@@ -583,6 +625,7 @@ export function TenderProvider({ children }: { children: React.ReactNode }) {
   const saveCompanyDoc = (key: keyof CompanyMasterDocuments, doc: CompanyDocumentItem | null) => {
     setCompanyDocs(prev => {
       const updated = { ...prev, [key]: doc }
+      persistLocalCompanyDocs(updated)
       return updated
     })
 
@@ -594,12 +637,17 @@ export function TenderProvider({ children }: { children: React.ReactNode }) {
       sealDoc: 'Company Seal / Stamp',
       signatureSealDoc: 'Signature and Seal',
     }
-    notify(doc ? `${titleMap[key]} saved successfully` : `${titleMap[key]} removed`)
+    notify(doc ? `${titleMap[key]} saved in vault` : `${titleMap[key]} removed`)
 
-    // Background push to Supabase
-    saveCompanyDocToSupabase(key, doc).catch(err => {
-      console.warn(`Supabase company doc sync for ${key}:`, err)
-    })
+    // Background push to Supabase with proper success/error notifications
+    saveCompanyDocToSupabase(key, doc)
+      .then(() => {
+        notify(`${titleMap[key]} synced to Supabase database!`)
+      })
+      .catch((err: any) => {
+        console.warn(`Supabase company doc sync for ${key}:`, err)
+        notify(`Saved in browser vault. Supabase note: ${err?.message || 'Database sync pending'}`)
+      })
   }
 
   return (

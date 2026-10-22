@@ -39,6 +39,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     }
   }, [])
 
+  // Automatically ensure sidebar stays expanded and never hidden on Tender Query page
+  useEffect(() => {
+    if (pathname === '/tender-query') {
+      setSidebarCollapsed(false)
+      try {
+        sessionStorage.setItem('tender_fms_sidebar_collapsed', 'false')
+      } catch (e) {
+        // ignore
+      }
+    }
+  }, [pathname])
+
   const handleToggleCollapse = () => {
     setSidebarCollapsed(prev => {
       const next = !prev
@@ -172,17 +184,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   const isPageAllowed = canAccessPage(pathname)
+  const isSidebarCollapsed = pathname === '/tender-query' ? false : sidebarCollapsed
 
   return (
-    <div className={`app-shell ${sidebarCollapsed ? 'sidebar-is-collapsed' : ''}`}>
+    <div className={`app-shell ${isSidebarCollapsed ? 'sidebar-is-collapsed' : ''}`}>
       <Sidebar
         mobileOpen={mobileOpen}
         onCloseMobile={() => setMobileOpen(false)}
-        collapsed={sidebarCollapsed}
+        collapsed={isSidebarCollapsed}
         onToggleCollapse={handleToggleCollapse}
       />
 
-      <div className={`main-content ${sidebarCollapsed ? 'content-expanded' : ''}`}>
+      <div className={`main-content ${isSidebarCollapsed ? 'content-expanded' : ''}`}>
         <Topbar onOpenMobile={() => setMobileOpen(true)} />
         {!isPageAllowed ? (
           <section className="page flex flex-col items-center justify-center min-h-[60vh] text-center p-6 animate-fade-in">

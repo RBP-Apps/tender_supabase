@@ -13,6 +13,7 @@ export const DEFAULT_USERS: AppUser[] = []
 export function clearAllLocalApplicationStorage(): void {
   if (typeof window === 'undefined') return
   try {
+    const EXEMPT_KEYS = ['tender_fms_company_docs_vault']
     const keysToRemove: string[] = [
       'tender-fms-state-v2',
       'tender-fms-state',
@@ -27,6 +28,7 @@ export function clearAllLocalApplicationStorage(): void {
       const key = window.localStorage.key(i)
       if (
         key &&
+        !EXEMPT_KEYS.includes(key) &&
         (key.startsWith('tender') ||
           key.startsWith('fms') ||
           key.includes('user') ||

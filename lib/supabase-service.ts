@@ -232,7 +232,11 @@ export async function fetchCompanyDocsFromSupabase(): Promise<CompanyMasterDocum
       .from('master_company_documents')
       .select('*')
 
-    if (error || !data || data.length === 0) {
+    if (error) {
+      console.warn('fetchCompanyDocsFromSupabase error:', error.message)
+      return {}
+    }
+    if (!data || data.length === 0) {
       return {}
     }
 
@@ -264,10 +268,14 @@ export async function saveCompanyDocToSupabase(
 ): Promise<void> {
   try {
     if (!doc) {
-      await supabase
+      const { error: delErr } = await supabase
         .from('master_company_documents')
         .delete()
         .eq('doc_key', key)
+      if (delErr) {
+        console.error(`Supabase delete company doc error (${key}):`, delErr)
+        throw new Error(delErr.message || 'Database error while deleting company document')
+      }
       return
     }
 
@@ -284,19 +292,25 @@ export async function saveCompanyDocToSupabase(
     if (finalFileUrl && finalFileUrl.startsWith('data:')) {
       const isImg = doc.type?.startsWith('image/') || /\.(png|jpg|jpeg|webp)$/i.test(doc.name || '')
       const ext = isImg ? (doc.name?.split('.').pop() || 'png') : 'pdf'
-      const uploadRes = await uploadToSupabaseBucket({
-        dataUrl: finalFileUrl,
-        fileName: doc.name || `${key}.${ext}`,
-        folder: STAGE_FOLDERS.MASTER_SETTINGS,
-        tenderId: key,
-      })
-      if (uploadRes.storage === 'bucket' && uploadRes.url) {
-        finalFileUrl = uploadRes.url
-        doc.dataUrl = uploadRes.url
+      try {
+        const uploadRes = await uploadToSupabaseBucket({
+          dataUrl: finalFileUrl,
+          fileName: doc.name || `${key}.${ext}`,
+          folder: STAGE_FOLDERS.MASTER_SETTINGS,
+          tenderId: key,
+        })
+        if (uploadRes.storage === 'bucket' && uploadRes.url) {
+          finalFileUrl = uploadRes.url
+          doc.dataUrl = uploadRes.url
+        } else if (uploadRes.error) {
+          console.warn(`Storage bucket upload note for ${key}:`, uploadRes.error)
+        }
+      } catch (uploadErr) {
+        console.warn(`Storage bucket exception for ${key}:`, uploadErr)
       }
     }
 
-    await supabase
+    const { error: upsertErr } = await supabase
       .from('master_company_documents')
       .upsert(
         {
@@ -312,8 +326,14 @@ export async function saveCompanyDocToSupabase(
         },
         { onConflict: 'doc_key' }
       )
-  } catch (err) {
-    console.warn(`saveCompanyDocToSupabase (${key}) notice:`, err)
+
+    if (upsertErr) {
+      console.error(`Supabase saveCompanyDocToSupabase error (${key}):`, upsertErr)
+      throw new Error(upsertErr.message || 'Database error while saving document')
+    }
+  } catch (err: any) {
+    console.error(`saveCompanyDocToSupabase (${key}) failed:`, err)
+    throw err
   }
 }
 

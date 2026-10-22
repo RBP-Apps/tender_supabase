@@ -9,11 +9,11 @@ import { TenderModal } from '@/components/modals/TenderModal'
 import { Tender } from '@/types/tender'
 
 export default function TenderDetailsPage() {
-  const { tenders, masters, addTender, updateTender, deleteTender, advanceStage } = useTenders()
+  const { tenders, masters, addTender, updateTender, deleteTender } = useTenders()
   const router = useRouter()
   const [query, setQuery] = useState('')
   const [stageFilter, setStageFilter] = useState('All stages')
-  const [modal, setModal] = useState<{ mode: 'new' | 'edit' | 'process'; tender?: Tender } | null>(null)
+  const [modal, setModal] = useState<{ mode: 'new' | 'edit'; tender?: Tender } | null>(null)
 
   const filtered = useMemo(() => {
     let list = tenders
@@ -56,8 +56,6 @@ export default function TenderDetailsPage() {
       setModal(null)
       router.push(`/tender-documents/${encodeURIComponent(modal.tender.id)}`)
       return
-    } else if (modal?.mode === 'process' && modal.tender) {
-      advanceStage(modal.tender.id, saved.stage, saved.status, saved.remarks)
     }
     setModal(null)
   }
@@ -111,7 +109,7 @@ export default function TenderDetailsPage() {
         {/* Reusable Fixed 400px table with Action as column 1 */}
         <TenderTable
           tenders={filtered}
-          onProcess={t => setModal({ mode: 'process', tender: t })}
+          showProcessButton={false}
           onEdit={t => setModal({ mode: 'edit', tender: t })}
           onDelete={id => {
             if (window.confirm(`Are you sure you want to delete tender ${id}?`)) {

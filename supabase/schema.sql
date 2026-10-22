@@ -687,9 +687,9 @@ BEGIN
       'portal_upload_history',
       'stage_06_submit_in_website',
       'stage_07_technical_open_check',
-      'stage_08_financial_open_check',
       'tender_stage_milestones',
-      'tender_documents_repository'
+      'tender_documents_repository',
+      'master_company_documents'
     )
   LOOP
     EXECUTE format('DROP POLICY IF EXISTS "Public full access" ON %I;', tbl);

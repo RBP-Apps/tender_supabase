@@ -56,6 +56,7 @@ export function Sidebar({
 }) {
   const pathname = usePathname()
   const { tenders, logout, currentUser, canAccessPage } = useTenders()
+  const isActuallyCollapsed = pathname === '/tender-query' ? false : collapsed
   const [tooltip, setTooltip] = useState<{
     text: string
     top: number
@@ -75,7 +76,7 @@ export function Sidebar({
     badge?: string,
     count?: number | null
   ) => {
-    if (!collapsed) return
+    if (!isActuallyCollapsed) return
     const rect = e.currentTarget.getBoundingClientRect()
     setTooltip({
       text,
@@ -99,7 +100,7 @@ export function Sidebar({
         />
       )}
 
-      <aside className={`sidebar ${collapsed ? 'sidebar-collapsed' : ''} ${mobileOpen ? 'sidebar-open' : ''}`}>
+      <aside className={`sidebar ${isActuallyCollapsed ? 'sidebar-collapsed' : ''} ${mobileOpen ? 'sidebar-open' : ''}`}>
         {/* 1. FIXED HEADER - Does NOT scroll */}
         <div className="sidebar-header">
           <Link href="/" className="brand" onClick={onCloseMobile} title="Tender FMS Workflow Hub">
@@ -117,12 +118,12 @@ export function Sidebar({
               type="button"
               className="sidebar-toggle-btn"
               onClick={onToggleCollapse}
-              title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-              aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-              onMouseEnter={(e) => handleMouseEnter(e, collapsed ? 'Expand sidebar' : 'Collapse sidebar')}
+              title={isActuallyCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              aria-label={isActuallyCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              onMouseEnter={(e) => handleMouseEnter(e, isActuallyCollapsed ? 'Expand sidebar' : 'Collapse sidebar')}
               onMouseLeave={handleMouseLeave}
             >
-              {collapsed ? <PanelLeftOpen className="w-4 h-4" /> : <PanelLeftClose className="w-4 h-4" />}
+              {isActuallyCollapsed ? <PanelLeftOpen className="w-4 h-4" /> : <PanelLeftClose className="w-4 h-4" />}
             </button>
 
             <button
@@ -253,7 +254,7 @@ export function Sidebar({
         </div>
 
         {/* Floating Tooltip rendered directly under aside to prevent overflow clipping */}
-        {collapsed && tooltip && (
+        {isActuallyCollapsed && tooltip && (
           <div
             className="sidebar-floating-tooltip"
             style={{ top: `${tooltip.top}px` }}

@@ -21,9 +21,10 @@ import { TenderDetailsViewModal } from '@/components/modals/TenderDetailsViewMod
 
 interface TenderTableProps {
   tenders: Tender[]
-  onProcess: (tender: Tender) => void
+  onProcess?: (tender: Tender) => void
   onEdit?: (tender: Tender) => void
   onDelete?: (id: string) => void
+  showProcessButton?: boolean
   history?: boolean
   emptyMessage?: string
   showCreateButton?: boolean
@@ -206,6 +207,7 @@ export function TenderTable({
   onProcess,
   onEdit,
   onDelete,
+  showProcessButton = true,
   history = false,
   emptyMessage,
   showCreateButton = false,
@@ -383,14 +385,16 @@ export function TenderTable({
                         >
                           <Eye className="w-4 h-4 text-purple-600" />
                         </button>
-                        <button
-                          className="table-action"
-                          title={history ? 'View Tender Details' : 'Process to next stage'}
-                          onClick={() => onProcess(t)}
-                        >
-                          {history ? 'View' : 'Process'} <ArrowRight />
-                        </button>
-                        {onEdit && (history || defaultViewMode === 'all') && (
+                        {showProcessButton && onProcess && (
+                          <button
+                            className="table-action"
+                            title={history ? 'View Tender Details' : 'Process to next stage'}
+                            onClick={() => onProcess(t)}
+                          >
+                            {history ? 'View' : 'Process'} <ArrowRight />
+                          </button>
+                        )}
+                        {onEdit && (
                           <button
                             className="icon-action text-amber-600 hover:text-amber-800"
                             title="Edit details"

@@ -20,6 +20,8 @@ import {
   Trash2,
   UploadCloud,
   X,
+  Copy,
+  ShieldCheck,
 } from 'lucide-react'
 import { BankAccountDetails, CompanyDocumentItem, CompanyMasterDocuments, MasterKey } from '@/types/tender'
 import { useTenders } from '@/context/TenderContext'
@@ -816,6 +818,38 @@ function SignOrSealSlotCard({
   )
 }
 
+const SUPABASE_SETUP_SQL = `-- 1. Create master_company_documents table
+CREATE TABLE IF NOT EXISTS public.master_company_documents (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  doc_key VARCHAR(50) NOT NULL UNIQUE,
+  doc_title VARCHAR(255) NOT NULL,
+  file_name VARCHAR(255),
+  file_size BIGINT,
+  mime_type VARCHAR(100),
+  file_url TEXT,
+  doc_value VARCHAR(255),
+  notes TEXT,
+  uploaded_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 2. Enable RLS and grant full public access
+ALTER TABLE public.master_company_documents ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Public full access master_company_documents" ON public.master_company_documents;
+CREATE POLICY "Public full access master_company_documents" ON public.master_company_documents FOR ALL USING (true) WITH CHECK (true);
+GRANT ALL ON public.master_company_documents TO anon, authenticated, service_role;
+
+-- 3. Ensure tender-documents storage bucket exists and is public
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('tender-documents', 'tender-documents', true)
+ON CONFLICT (id) DO UPDATE SET public = true;
+
+DROP POLICY IF EXISTS "Public Storage Full Access" ON storage.objects;
+CREATE POLICY "Public Storage Full Access" ON storage.objects
+FOR ALL USING (bucket_id = 'tender-documents')
+WITH CHECK (bucket_id = 'tender-documents');`
+
 interface SignatureAndSealCardProps {
   signatureDoc: CompanyDocumentItem | null | undefined
   sealDoc: CompanyDocumentItem | null | undefined
@@ -900,15 +934,39 @@ function SignatureAndSealCard({
         </div>
 
         {/* Diagnostic Storage Info & Validation Note */}
-        <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-700 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-          <div className="flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
-            <span className="text-[11px] text-slate-600">
-              <strong>Validation Rule:</strong> PNG images must have a 100% transparent background (no white scans or colored backgrounds). PDF documents are also accepted.
+        <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-700 flex flex-col gap-2.5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-200/80">
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+              <span className="text-xs font-semibold text-slate-800">
+                Persistent Storage: <span className="text-emerald-700 font-bold">Browser Vault Active</span> • <span className="text-purple-700 font-bold">Supabase Cloud Sync Ready</span>
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                navigator.clipboard.writeText(SUPABASE_SETUP_SQL)
+                notify('Supabase SQL query copied to clipboard! Paste and run it in Supabase SQL Editor.')
+              }}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-purple-300 bg-purple-50 hover:bg-purple-100 text-purple-800 text-[11px] font-semibold transition-colors self-start sm:self-auto cursor-pointer"
+              title="Copy SQL to create table and bucket policies in Supabase"
+            >
+              <Copy className="w-3.5 h-3.5" />
+              <span>Copy Supabase SQL Setup</span>
+            </button>
+          </div>
+
+          <div className="flex items-start gap-2 text-[11px] text-slate-600">
+            <AlertTriangle className="w-3.5 h-3.5 text-amber-600 flex-shrink-0 mt-0.5" />
+            <span>
+              <strong>Transparent Verification:</strong> PNG images must have a 100% transparent background (no white scan borders). PDF proofs are also accepted. Uploaded files remain saved in browser vault even if database sync is pending.
             </span>
           </div>
-          <div className="text-[11px] font-mono text-slate-600 bg-white px-2 py-1 rounded border border-slate-200 flex-shrink-0">
-            Table: <strong className="text-slate-900">master_company_documents</strong> • Bucket: <strong className="text-slate-900">tender-documents</strong>
+
+          <div className="text-[11px] font-mono text-slate-500 bg-white px-2.5 py-1.5 rounded-lg border border-slate-200 flex flex-wrap items-center gap-x-4 gap-y-1">
+            <span>Table: <strong className="text-slate-800">master_company_documents</strong></span>
+            <span>Bucket: <strong className="text-slate-800">tender-documents</strong></span>
+            <span>Keys: <strong className="text-purple-700">signatureDoc</strong>, <strong className="text-purple-700">sealDoc</strong></span>
           </div>
         </div>
       </div>
