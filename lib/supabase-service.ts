@@ -115,6 +115,34 @@ export async function deleteMasterCategoryFromSupabase(categoryType: MasterKey, 
   }
 }
 
+export async function updateMasterCategoryInSupabase(
+  categoryType: MasterKey,
+  oldName: string,
+  newName: string
+) {
+  try {
+    const trimmedOld = oldName.trim()
+    const trimmedNew = newName.trim()
+    if (trimmedOld === trimmedNew) return
+
+    const { error } = await supabase
+      .from('master_categories')
+      .update({ name: trimmedNew })
+      .eq('category_type', categoryType)
+      .eq('name', trimmedOld)
+
+    if (error) {
+      console.warn('Direct update failed, falling back to delete & add:', error)
+      await deleteMasterCategoryFromSupabase(categoryType, trimmedOld)
+      await addMasterCategoryToSupabase(categoryType, trimmedNew)
+    }
+  } catch (err) {
+    console.error('updateMasterCategoryInSupabase error:', err)
+    throw err
+  }
+}
+
+
 // ====================================================================
 // SELF / COMPANY BANK ACCOUNTS
 // ====================================================================
@@ -178,6 +206,22 @@ export async function deleteSelfAccountFromSupabase(accountNo: string) {
   }
 }
 
+export async function updateSelfAccountInSupabase(
+  oldAccountNo: string,
+  account: BankAccountDetails
+) {
+  try {
+    if (oldAccountNo !== account.accountNo) {
+      await deleteSelfAccountFromSupabase(oldAccountNo)
+    }
+    await saveSelfAccountToSupabase(account)
+  } catch (err) {
+    console.error('updateSelfAccountInSupabase error:', err)
+    throw err
+  }
+}
+
+
 // ====================================================================
 // COMPANY MASTER DOCUMENTS (Settings: Turnover, Networth, Experience)
 // ====================================================================
@@ -231,13 +275,18 @@ export async function saveCompanyDocToSupabase(
       turnoverDoc: 'Company Turnover Document',
       networthDoc: 'Networth Certificate',
       experienceDoc: 'Work Completion / Experience Certificate',
+      signatureDoc: 'Authorised Signatory / Signature',
+      sealDoc: 'Company Seal / Stamp',
+      signatureSealDoc: 'Company Signature and Seal',
     }
 
     let finalFileUrl = doc.dataUrl || null
     if (finalFileUrl && finalFileUrl.startsWith('data:')) {
+      const isImg = doc.type?.startsWith('image/') || /\.(png|jpg|jpeg|webp)$/i.test(doc.name || '')
+      const ext = isImg ? (doc.name?.split('.').pop() || 'png') : 'pdf'
       const uploadRes = await uploadToSupabaseBucket({
         dataUrl: finalFileUrl,
-        fileName: doc.name || `${key}.pdf`,
+        fileName: doc.name || `${key}.${ext}`,
         folder: STAGE_FOLDERS.MASTER_SETTINGS,
         tenderId: key,
       })

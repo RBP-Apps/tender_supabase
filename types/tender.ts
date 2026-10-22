@@ -125,6 +125,9 @@ export interface CompanyMasterDocuments {
   turnoverDoc?: CompanyDocumentItem | null
   networthDoc?: CompanyDocumentItem | null
   experienceDoc?: CompanyDocumentItem | null
+  signatureDoc?: CompanyDocumentItem | null
+  sealDoc?: CompanyDocumentItem | null
+  signatureSealDoc?: CompanyDocumentItem | null
 }
 
 export interface BankAccountDetails {
@@ -186,6 +189,7 @@ export interface PortalChecklistItem {
   checked: boolean
   matchedFieldKey?: string
   matchedDocumentName?: string
+  envelope?: string
 }
 
 export interface DocumentReadyData {

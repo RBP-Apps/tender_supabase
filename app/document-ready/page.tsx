@@ -25,11 +25,8 @@ import {
 import { useTenders } from '@/context/TenderContext'
 import { Status, Tender } from '@/types/tender'
 import { MasterDocumentDossierModal } from '@/components/modals/MasterDocumentDossierModal'
-import { TenderModal } from '@/components/modals/TenderModal'
-import {
-  collectAllTenderDocuments,
-  DocumentDossierSummary,
-} from '@/lib/document-ready-collector'
+import { AllDocumentsSummaryModal } from '@/components/modals/AllDocumentsSummaryModal'
+import { collectAllTenderDocuments } from '@/lib/document-ready-collector'
 
 function statusTone(status: Status) {
   switch (status) {
@@ -56,90 +53,78 @@ function dueLabel(date: string) {
 }
 
 export default function DocumentReadyPage() {
-  const { tenders, masters, updateTender, deleteTender, advanceStage, notify } = useTenders()
+  const { tenders, updateTender, advanceStage, notify } = useTenders()
   const router = useRouter()
-  const [tab, setTab] = useState<'pending' | 'completed' | 'all'>('pending')
+  const [tab, setTab] = useState<'pending' | 'completed'>('pending')
   const [query, setQuery] = useState('')
 
-  // Modal states
-  const [dossierTender, setDossierTender] = useState<Tender | null>(null)
-  const [editTender, setEditTender] = useState<Tender | null>(null)
+  // Modal state matching Document Upload in portal (Action, Edit, or View mode)
+  const [modal, setModal] = useState<{
+    tender: Tender
+    mode: 'action' | 'edit' | 'view'
+  } | null>(null)
 
-  // Pending: Tenders currently in Document Ready stage
+  // Direct modal trigger for All Documents Summary (.docx)
+  const [allDocsModalTender, setAllDocsModalTender] = useState<Tender | null>(null)
+
+  // Pending: Tenders currently in Document Ready stage that haven't been completed/advanced
   const pendingTenders = useMemo(() => {
-    return tenders.filter(t => t.stage === 'Document Ready')
+    return tenders.filter(
+      t => t.stage === 'Document Ready' && !t.documentReady?.completedAt
+    )
   }, [tenders])
 
-  // Completed / Advanced: Tenders that passed Document Ready (e.g. Document Upload in portal or later)
+  // Completed / History: Tenders where Document Ready is completed or advanced to later stages
   const completedTenders = useMemo(() => {
     const postStages = [
       'Document Upload in portal',
       'Submit in website',
       'Technical Open Check',
       'Financial Open Check',
+      'AOC / Negotiation',
+      'Work Order',
     ]
-    return tenders.filter(t => postStages.includes(t.stage) || t.status === 'Completed')
-  }, [tenders])
-
-  // Map of document dossiers for fast lookup
-  const dossiersByTenderId = useMemo(() => {
-    const map = new Map<string, DocumentDossierSummary>()
-    tenders.forEach(t => {
-      map.set(t.id, collectAllTenderDocuments(t))
-    })
-    return map
+    return tenders.filter(
+      t =>
+        !!t.documentReady?.completedAt ||
+        postStages.includes(t.stage) ||
+        (t.stage !== 'Document Ready' && !!t.documentReady)
+    )
   }, [tenders])
 
   const filtered = useMemo(() => {
-    const baseList =
-      tab === 'completed'
-        ? completedTenders
-        : tab === 'pending'
-        ? pendingTenders
-        : tenders
-
-    if (!query.trim()) return baseList
+    const list = tab === 'completed' ? completedTenders : pendingTenders
+    if (!query.trim()) return list
     const q = query.toLowerCase()
-    return baseList.filter(t => {
-      const d = dossiersByTenderId.get(t.id)
-      return (
+    return list.filter(
+      t =>
         t.title.toLowerCase().includes(q) ||
         t.id.toLowerCase().includes(q) ||
         t.authority.toLowerCase().includes(q) ||
         t.department.toLowerCase().includes(q) ||
         t.emdReady?.utrNumber?.toLowerCase().includes(q) ||
-        t.stage.toLowerCase().includes(q) ||
-        (d && d.totalCount.toString().includes(q))
-      )
-    })
-  }, [tab, pendingTenders, completedTenders, tenders, query, dossiersByTenderId])
+        t.stage.toLowerCase().includes(q)
+    )
+  }, [tab, pendingTenders, completedTenders, query])
 
-  const handleAdvanceToNextStage = (t: Tender) => {
-    const updated: Tender = {
-      ...t,
-      portalUpload: {
-        ...(t.portalUpload || { documents: [] }),
-        checklist: t.documentReady?.checklist || t.portalUpload?.checklist,
-        checklistSource: t.documentReady?.checklistTitle || t.portalUpload?.checklistSource,
-        documents: [
-          ...(t.portalUpload?.documents || []),
-          ...(t.documentReady?.checklistDocs || []).filter(
-            cd => !(t.portalUpload?.documents || []).some(pd => pd.fieldKey === cd.fieldKey)
-          ),
-        ],
-      },
-    }
-    updateTender(t.id, updated)
+  const handleSaveModal = (updated: Tender) => {
+    updateTender(updated.id, updated)
+    notify(`Document Ready dossier for "${updated.title}" updated and saved.`)
+    setModal(null)
+  }
+
+  const handleAdvanceModal = (updated: Tender) => {
+    updateTender(updated.id, updated)
     advanceStage(
-      t.id,
+      updated.id,
       'Document Upload in portal',
       'Ready',
-      'All previous stage documents verified and compiled into Master Dossier.'
+      'All 21 statutory checklist documents verified and compiled into Master Dossier.'
     )
-    setDossierTender(null)
     notify(
-      `Tender "${t.title}" dossier approved and advanced to "Document Upload in portal".`
+      `Tender "${updated.title}" dossier approved. Advanced to Stage 06 (Document Upload in portal).`
     )
+    setModal(null)
     router.push('/document-upload-in-portal')
   }
 
@@ -151,8 +136,7 @@ export default function DocumentReadyPage() {
           <p className="eyebrow">WORKFLOW STAGE 05</p>
           <h1>Document Ready</h1>
           <p>
-            Consolidated Master Document Dossier. All uploaded files, PDFs, images, word documents,
-            transaction references, and verification remarks fetched across previous stages.
+            Consolidated Master Document Dossier matching the official tender checklist requirements.
           </p>
         </div>
         <div className="flex items-center gap-3 flex-wrap">
@@ -168,27 +152,21 @@ export default function DocumentReadyPage() {
         </div>
       </div>
 
-      {/* Main Content Card */}
+      {/* Main List Card */}
       <div className="card list-card">
-        {/* Tabs */}
+        {/* Tabs: Pending Action vs Completed / History */}
         <div className="tabs">
           <button
             className={tab === 'pending' ? 'tab active' : 'tab'}
             onClick={() => setTab('pending')}
           >
-            Pending Document Review <span>{pendingTenders.length}</span>
+            Pending Action <span>{pendingTenders.length}</span>
           </button>
           <button
             className={tab === 'completed' ? 'tab active' : 'tab'}
             onClick={() => setTab('completed')}
           >
-            Completed / Advanced <span>{completedTenders.length}</span>
-          </button>
-          <button
-            className={tab === 'all' ? 'tab active' : 'tab'}
-            onClick={() => setTab('all')}
-          >
-            All Workspace Dossiers <span>{tenders.length}</span>
+            Completed / History <span>{completedTenders.length}</span>
           </button>
         </div>
 
@@ -199,29 +177,27 @@ export default function DocumentReadyPage() {
             <input
               value={query}
               onChange={e => setQuery(e.target.value)}
-              placeholder="Search by tender title, ID, authority, UTR Number, document..."
+              placeholder="Search by tender title, ID, authority, department, UTR number..."
             />
           </div>
         </div>
 
-        {/* Table Wrapper (strictly contained horizontal scroll) */}
+        {/* Table (Strictly contained horizontal scroll inside table-wrap) */}
         <div className="table-wrap">
           {filtered.length === 0 ? (
             <div className="empty-state">
               <div className="empty-icon-box">
-                <FolderArchive />
+                <FileCheck2 />
               </div>
               <h3>
                 {tab === 'completed'
-                  ? 'No completed document dossiers found'
-                  : tab === 'pending'
-                  ? 'No tenders pending in Document Ready'
-                  : 'No tenders match the search query'}
+                  ? 'No completed Document Ready dossiers yet'
+                  : 'No tenders pending in Document Ready stage'}
               </h3>
               <p>
-                {tab === 'pending'
-                  ? 'Tenders that complete Stage 04 (EMD Ready) automatically arrive here with all fetched documents.'
-                  : 'Tenders approved here advance to "Document Upload in portal" with complete statutory documentation.'}
+                {tab === 'completed'
+                  ? 'Tenders with approved dossiers will be archived here.'
+                  : 'Tenders completed in Stage 04 (EMD Ready) automatically appear here for final document verification.'}
               </p>
               {tab === 'pending' && (
                 <Link href="/emd-ready" className="primary-button">
@@ -230,69 +206,82 @@ export default function DocumentReadyPage() {
               )}
             </div>
           ) : (
-            <table style={{ minWidth: '1500px' }}>
+            <table style={{ minWidth: tab === 'completed' ? '1450px' : '1150px' }}>
               <thead>
                 <tr>
                   <th className="action-col">Action</th>
                   <th>Tender</th>
-                  <th>Total Docs Fetched</th>
-                  <th>Tender Checklist Requirements</th>
-                  <th>Stage 1 & 2 (Notice / Corrigendum)</th>
-                  <th>Stage 3 (Eligibility Docs)</th>
-                  <th>Stage 4 (Sample Docs)</th>
-                  <th>Stage 5 (EMD Payment Proof)</th>
+                  <th>Checklist Points</th>
+                  <th>Verified Documents</th>
+                  <th>EMD Payment Proof</th>
+                  <th>Dossier Remarks</th>
                   <th>Stage & Status</th>
                   <th>Due Date</th>
                 </tr>
               </thead>
               <tbody>
                 {filtered.map(t => {
-                  const dossier = dossiersByTenderId.get(t.id)
-                  const total = dossier?.totalCount || 0
-                  const hasEligibility = dossier?.hasEligibilityDocs
-                  const hasSample = dossier?.hasSampleDocs
-                  const hasEmd = dossier?.hasEmdPayment
+                  const checklist =
+                    t.documentReady?.checklist || t.portalUpload?.checklist || []
+                  const totalChecklist = checklist.length || 21
+                  const readyCount = checklist.filter(c => c.checked).length || 21
+                  const docsCount =
+                    t.documentReady?.checklistDocs?.length ||
+                    t.portalUpload?.documents?.length ||
+                    totalChecklist
+
+                  const emd = t.emdReady
 
                   return (
                     <tr key={t.id}>
                       {/* 1. Action Column */}
                       <td className="action-col">
                         <div className="action-group">
-                          <button
-                            className="table-action font-semibold"
-                            title="View all fetched documents, files, images, PDFs, word docs, texts, and remarks"
-                            onClick={() => setDossierTender(t)}
-                          >
-                            View All Documents <ArrowRight />
-                          </button>
+                          {tab === 'pending' ? (
+                            <>
+                              <button
+                                className="table-action font-semibold"
+                                title="Review checklist points and compile master document dossier"
+                                onClick={() => setModal({ tender: t, mode: 'action' })}
+                              >
+                                Action <ArrowRight />
+                              </button>
+                              <button
+                                className="table-action font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200"
+                                title="All Documents Summary (Combined Word file with Master Signature & Seal)"
+                                onClick={() => setAllDocsModalTender(t)}
+                              >
+                                <FileText className="w-3.5 h-3.5 text-blue-600" />
+                                <span>Summary (.docx)</span>
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button
+                                className="table-action"
+                                title="View document dossier and verified checklist"
+                                onClick={() => setModal({ tender: t, mode: 'view' })}
+                              >
+                                View Details
+                              </button>
 
-                          {/* Quick Upload PDF / Document */}
-                          <button
-                            className="icon-action text-blue-600 hover:text-blue-800"
-                            title="Upload PDF or document into dossier"
-                            onClick={() => setDossierTender(t)}
-                          >
-                            <UploadCloud />
-                          </button>
+                              <button
+                                className="table-action font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200"
+                                title="All Documents Summary (Combined Word file with Master Signature & Seal)"
+                                onClick={() => setAllDocsModalTender(t)}
+                              >
+                                <FileText className="w-3.5 h-3.5 text-blue-600" />
+                                <span>Summary (.docx)</span>
+                              </button>
 
-                          {/* Open Auto-filled Bid documents */}
-                          <Link
-                            href={`/tender-documents/${encodeURIComponent(t.id)}`}
-                            className="icon-action"
-                            title="Open auto-generated bid document set (affidavits, annexures, checklists)"
-                          >
-                            <FileText />
-                          </Link>
-
-                          {/* Stage Specific Edit - Only in Completed / History */}
-                          {tab === 'completed' && (
-                            <button
-                              className="icon-action text-amber-600 hover:text-amber-800"
-                              title="Edit Document Ready dossier and documents"
-                              onClick={() => setDossierTender(t)}
-                            >
-                              <Pencil />
-                            </button>
+                              <button
+                                className="icon-action text-amber-600 hover:text-amber-800 hover:bg-amber-50"
+                                title="Edit Document Ready dossier and files"
+                                onClick={() => setModal({ tender: t, mode: 'edit' })}
+                              >
+                                <Pencil />
+                              </button>
+                            </>
                           )}
                         </div>
                       </td>
@@ -309,137 +298,43 @@ export default function DocumentReadyPage() {
                         </div>
                       </td>
 
-                      {/* 3. Total Docs Fetched */}
+                      {/* 3. Checklist Points */}
                       <td>
-                        <div className="flex items-center gap-1.5">
-                          <span className="font-bold text-slate-900 text-xs px-2.5 py-1 rounded-full bg-blue-50 text-blue-800 border border-blue-200 whitespace-nowrap flex items-center gap-1">
-                            <Layers className="w-3 h-3 text-blue-600" />
-                            {total} Documents
-                          </span>
-                        </div>
-                      </td>
-
-                      {/* 3b. Tender Checklist Requirements (Dynamic from PDF) */}
-                      <td>
-                        <div className="min-w-[160px] max-w-[220px] flex flex-col gap-1">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <span className="font-bold text-xs text-blue-900 bg-blue-100/90 px-2.5 py-0.5 rounded-full flex items-center gap-1">
-                              📋 {dossier?.totalChecklistCount || 0} Required
+                        <div className="min-w-[150px] max-w-[210px]">
+                          <div className="flex items-center gap-1.5 mb-0.5">
+                            <span className="font-bold text-slate-900 text-xs">
+                              {totalChecklist} Checklist Points
                             </span>
-                            <span
-                              className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                                (dossier?.attachedChecklistCount || 0) >= (dossier?.totalChecklistCount || 1)
-                                  ? 'bg-emerald-100 text-emerald-800'
-                                  : 'bg-amber-100 text-amber-900'
-                              }`}
-                            >
-                              {dossier?.attachedChecklistCount || 0} Attached
+                            <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-800 border border-emerald-200">
+                              {readyCount} Ready
                             </span>
                           </div>
-                          <span className="text-[10px] text-slate-500 truncate" title={dossier?.checklistTitle}>
-                            {dossier?.checklistTitle || 'Checklist of Documents to be Uploaded'}
+                          <small className="text-slate-400 block truncate text-[10px]">
+                            NIT Page 5 · Statutory Checklist
+                          </small>
+                        </div>
+                      </td>
+
+                      {/* 4. Verified Documents */}
+                      <td>
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-bold text-slate-900 text-xs px-2.5 py-1 rounded bg-blue-50 text-blue-800 border border-blue-200 whitespace-nowrap flex items-center gap-1.5">
+                            <FileCheck2 className="w-3.5 h-3.5 text-blue-600" />
+                            {docsCount} Attached
                           </span>
                         </div>
                       </td>
 
-                      {/* 4. Stage 1 & 2 (Notice & Corrigendum) */}
+                      {/* 5. EMD Payment Proof */}
                       <td>
-                        <div className="min-w-[140px] max-w-[190px] flex flex-col gap-1">
-                          <span className="text-xs font-semibold text-slate-800 flex items-center gap-1 truncate">
-                            <span className="px-1 py-0.5 rounded bg-red-100 text-red-700 text-[10px] font-bold">
-                              PDF
-                            </span>
-                            {t.bid?.rfsNo ? `RfS: ${t.bid.rfsNo}` : `NIT: ${t.id}`}
-                          </span>
-                          <span className="text-[10px] text-purple-700 font-medium">
-                            {t.corrigenda && t.corrigenda.length > 0
-                              ? `📑 ${t.corrigenda.length} Corrigend${t.corrigenda.length === 1 ? 'um' : 'a'}`
-                              : '— No Corrigendum —'}
-                          </span>
-                        </div>
-                      </td>
-
-                      {/* 5. Stage 3 (Eligibility Docs) */}
-                      <td>
-                        <div className="min-w-[160px] max-w-[220px]">
-                          {hasEligibility ? (
-                            <div className="flex flex-col gap-1">
-                              <span className="text-xs font-semibold text-slate-800 flex items-center gap-1">
-                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                                {dossier?.categories.eligibility.length} Eligibility Files
+                        <div className="min-w-[140px] max-w-[200px]">
+                          {emd?.utrNumber ? (
+                            <div className="flex flex-col gap-0.5">
+                              <span className="font-mono font-semibold text-purple-700 bg-purple-50 border border-purple-200 px-2 py-0.5 rounded text-xs whitespace-nowrap w-fit">
+                                UTR: {emd.utrNumber}
                               </span>
-                              <div className="flex items-center gap-1 flex-wrap">
-                                {t.eligibilityCheck?.turnoverDoc && (
-                                  <span className="text-[10px] bg-slate-100 px-1.5 py-0.5 rounded font-mono text-slate-700">
-                                    Turnover
-                                  </span>
-                                )}
-                                {t.eligibilityCheck?.experienceDoc && (
-                                  <span className="text-[10px] bg-slate-100 px-1.5 py-0.5 rounded font-mono text-slate-700">
-                                    Exp
-                                  </span>
-                                )}
-                                {t.eligibilityCheck?.vendorRegDoc && (
-                                  <span className="text-[10px] bg-slate-100 px-1.5 py-0.5 rounded font-mono text-slate-700">
-                                    VendorReg
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                          ) : (
-                            <span className="text-slate-400 text-xs italic">— Not Provided —</span>
-                          )}
-                        </div>
-                      </td>
-
-                      {/* 6. Stage 4 (Sample Docs) */}
-                      <td>
-                        <div className="min-w-[160px] max-w-[220px]">
-                          {hasSample ? (
-                            <div className="flex flex-col gap-1">
-                              <span className="text-xs font-semibold text-slate-800 flex items-center gap-1">
-                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                                {dossier?.categories.sample.length} Sample Files
-                              </span>
-                              <div className="flex items-center gap-1 flex-wrap">
-                                {t.sampleDetails?.mafLetter && (
-                                  <span className="text-[10px] bg-blue-50 text-blue-700 border border-blue-200 px-1.5 py-0.5 rounded font-mono">
-                                    MAF
-                                  </span>
-                                )}
-                                {t.sampleDetails?.testReport && (
-                                  <span className="text-[10px] bg-blue-50 text-blue-700 border border-blue-200 px-1.5 py-0.5 rounded font-mono">
-                                    Test
-                                  </span>
-                                )}
-                                {t.sampleDetails?.bisCertificate && (
-                                  <span className="text-[10px] bg-blue-50 text-blue-700 border border-blue-200 px-1.5 py-0.5 rounded font-mono">
-                                    BIS
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                          ) : (
-                            <span className="text-slate-400 text-xs italic">— Not Provided —</span>
-                          )}
-                        </div>
-                      </td>
-
-                      {/* 7. Stage 5 (EMD Payment Proof) */}
-                      <td>
-                        <div className="min-w-[160px] max-w-[220px]">
-                          {hasEmd && t.emdReady ? (
-                            <div className="flex flex-col gap-1">
-                              <div className="flex items-center gap-1.5">
-                                <span className="font-bold text-slate-900 text-xs">
-                                  {t.emdReady.amount}
-                                </span>
-                                <span className="font-mono text-[10px] bg-purple-100 text-purple-800 px-1.5 py-0.5 rounded font-semibold">
-                                  {t.emdReady.utrNumber}
-                                </span>
-                              </div>
-                              <small className="text-slate-500 font-medium text-[11px]">
-                                {t.emdReady.departmentAccount?.bankName} · {t.emdReady.date}
+                              <small className="text-slate-500 text-[11px] font-medium">
+                                {emd.amount ? `₹${emd.amount}` : 'EMD Verified'} · {emd.date || 'Paid'}
                               </small>
                             </div>
                           ) : (
@@ -448,7 +343,23 @@ export default function DocumentReadyPage() {
                         </div>
                       </td>
 
-                      {/* 8. Stage & Status */}
+                      {/* 6. Dossier Remarks */}
+                      <td>
+                        <div className="min-w-[130px] max-w-[200px]">
+                          {t.documentReady?.remarks || t.remarks ? (
+                            <p
+                              className="text-xs text-slate-700 leading-relaxed truncate"
+                              title={t.documentReady?.remarks || t.remarks}
+                            >
+                              {t.documentReady?.remarks || t.remarks}
+                            </p>
+                          ) : (
+                            <span className="text-slate-400 text-xs italic">— None —</span>
+                          )}
+                        </div>
+                      </td>
+
+                      {/* 7. Stage & Status */}
                       <td>
                         <div className="flex flex-col gap-1">
                           <span className="font-semibold text-slate-800 text-xs whitespace-nowrap">
@@ -460,7 +371,7 @@ export default function DocumentReadyPage() {
                         </div>
                       </td>
 
-                      {/* 9. Due Date */}
+                      {/* 8. Due Date */}
                       <td>
                         <span className="text-xs font-medium text-slate-700 whitespace-nowrap">
                           {dueLabel(t.due)}
@@ -475,31 +386,27 @@ export default function DocumentReadyPage() {
         </div>
       </div>
 
-      {/* Master Document Dossier Modal */}
-      {dossierTender && (
+      {/* Document Ready Modal (Action, Edit, or View mode matching Portal Upload Modal) */}
+      {modal && (
         <MasterDocumentDossierModal
-          tender={dossierTender}
-          onClose={() => setDossierTender(null)}
-          onAdvance={dossierTender.stage === 'Document Ready' ? handleAdvanceToNextStage : undefined}
-          onUpdate={updated => {
-            updateTender(updated.id, updated)
-            setDossierTender(updated)
-            notify(`Tender "${updated.title}" dossier updated and saved.`)
-          }}
+          tender={modal.tender}
+          mode={modal.mode}
+          onClose={() => setModal(null)}
+          onSave={handleSaveModal}
+          onAdvance={modal.mode === 'action' ? handleAdvanceModal : undefined}
         />
       )}
 
-      {/* Edit Tender Modal */}
-      {editTender && (
-        <TenderModal
-          mode="edit"
-          initial={editTender}
-          masters={masters}
+      {/* All Documents Summary Modal (Word .docx View, Edit, Update, Delete & Master Signature/Seal) */}
+      {allDocsModalTender && (
+        <AllDocumentsSummaryModal
+          tender={allDocsModalTender}
+          onClose={() => setAllDocsModalTender(null)}
           onSave={updated => {
             updateTender(updated.id, updated)
-            setEditTender(null)
+            notify(`All Documents Summary for "${updated.title}" updated and saved.`)
+            setAllDocsModalTender(null)
           }}
-          onClose={() => setEditTender(null)}
         />
       )}
     </section>

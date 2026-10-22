@@ -26,11 +26,11 @@ import {
  */
 
 // A4 with 2 cm margins
-const PAGE_WIDTH_TWIP = 11906
-const PAGE_HEIGHT_TWIP = 16838
-const MARGIN_TWIP = 1134
-const CONTENT_WIDTH_TWIP = PAGE_WIDTH_TWIP - 2 * MARGIN_TWIP
-const CONTENT_WIDTH_PX = Math.round((CONTENT_WIDTH_TWIP / 1440) * 96)
+export const PAGE_WIDTH_TWIP = 11906
+export const PAGE_HEIGHT_TWIP = 16838
+export const MARGIN_TWIP = 1134
+export const CONTENT_WIDTH_TWIP = PAGE_WIDTH_TWIP - 2 * MARGIN_TWIP
+export const CONTENT_WIDTH_PX = Math.round((CONTENT_WIDTH_TWIP / 1440) * 96)
 
 interface RunFormat {
   bold?: boolean
@@ -383,6 +383,16 @@ class DocxBuilder {
       borders: { top: border, bottom: border, left: border, right: border, insideHorizontal: border, insideVertical: border },
     })
   }
+}
+
+export { DocxBuilder }
+
+export async function htmlToBlocks(html: string): Promise<(Paragraph | Table)[]> {
+  const container = document.createElement('div')
+  container.innerHTML = html
+  const builder = new DocxBuilder()
+  await builder.prepareImages(container)
+  return builder.blocks(container, {})
 }
 
 export async function htmlToDocxBlob(html: string, title: string): Promise<Blob> {

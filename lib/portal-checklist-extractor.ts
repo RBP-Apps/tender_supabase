@@ -94,6 +94,7 @@ export async function extractPortalChecklist(
               requirement: item.requirement || (item.isMandatory ? 'Mandatory' : 'Conditional'),
               applicableDetails: item.applicableDetails || (item.envelope ? `Envelope: ${item.envelope}` : ''),
               clauseOrPageRef: item.clauseOrPageRef || (json.data.pageOrClause ? json.data.pageOrClause : ''),
+              envelope: item.envelope || (slNo <= 7 ? 'Envelope A: Pre-Qualification' : 'Envelope B: Technical and Financial Qualification'),
               isMandatory: item.isMandatory !== false,
               checked: isPreviouslyChecked,
               matchedFieldKey: matchedDoc?.fieldKey,
@@ -140,193 +141,343 @@ export function getHeuristicChecklist(
     return attachedDocs.find(d => keys.some(k => d.fieldKey.toLowerCase().includes(k)))
   }
 
-  // Item 1: Tender Notice / NIT & Corrigendum Copy
-  const matchNIT = findMatch(['tendernotice', 'nit', 'tender_doc'])
-  dynamicItems.push({
-    id: 'chk-1',
-    docName: '1. Scanned Copy of Tender Notice / NIT & all Corrigendum / Addendum Documents',
-    requirement: 'Mandatory',
-    applicableDetails: tender.corrigenda?.length
-      ? `Signed NIT with all ${tender.corrigenda.length} issued corrigenda acknowledged`
-      : 'Signed & stamped NIT copy with tender document acknowledgment',
-    clauseOrPageRef: 'Clause: Tender Document Submission',
-    isMandatory: true,
-    checked: previousCheckedMap['chk-1'] ?? !!matchNIT,
-    matchedFieldKey: matchNIT?.fieldKey || 'tenderNotice',
-    matchedDocumentName: matchNIT?.name,
-  })
-
-  // Item 2: Tender Fee & EMD Transaction Proof
-  const matchEMD = findMatch(['emdproof', 'emd', 'challan'])
+  // 1. EMD + Tender Document Fee submission form
+  const matchEMD = findMatch(['emdproof', 'emd', 'challan', 'fee'])
   const emdFromPackage = tender.bid?.packages?.[0]?.emdLakh
     ? `₹${tender.bid.packages[0].emdLakh} Lakh`
     : tender.emdReady?.amount
     ? `₹${tender.emdReady.amount}`
-    : null
-  const emdDetailText = emdFromPackage
-    ? `EMD Amount: ${emdFromPackage} (UTR/Bank Guarantee/MSME Exemption)`
-    : tender.emdReady?.utrNumber
-    ? `UTR No: ${tender.emdReady.utrNumber}`
-    : 'Online payment receipt / Bank Guarantee / Exemption MSME certificate'
+    : 'Rs. 3,11,800/-'
   dynamicItems.push({
-    id: 'chk-2',
-    docName: '2. Scanned Copy of Tender Fee Receipt & EMD Payment Proof / Bank Guarantee',
-    requirement: 'Mandatory (unless claiming statutory MSME / NSIC exemption)',
-    applicableDetails: emdDetailText,
-    clauseOrPageRef: 'Clause: EMD & Tender Fee',
+    id: 'chk-1',
+    docName: '1. EMD + Tender Document Fee submission form of the bidder confirmed by CREDA (as on page – 6)',
+    requirement: 'Mandatory (Single NEFT/RTGS Transaction)',
+    applicableDetails: `EMD Amount: ${emdDetailText(tender, emdFromPackage)}. Form as per Page 6 of tender document.`,
+    clauseOrPageRef: 'Page 6 (Details of EMD & Fee)',
+    envelope: 'Envelope A: Pre-Qualification',
     isMandatory: true,
-    checked: previousCheckedMap['chk-2'] ?? !!matchEMD,
+    checked: previousCheckedMap['chk-1'] ?? !!matchEMD,
     matchedFieldKey: matchEMD?.fieldKey || 'emdProof',
     matchedDocumentName: matchEMD?.name,
   })
 
-  // Item 3: Annual Financial Turnover Certificate
-  const matchTurnover = findMatch(['turnover', 'ca_cert'])
+  // 2. Undertaking of the Bidder (Page 7)
+  const matchUndertaking = findMatch(['undertaking', 'bidannexures', 'format'])
+  dynamicItems.push({
+    id: 'chk-2',
+    docName: '2. Scanned Copy of Undertaking of the Bidder as mentioned on Page – 7 of the tender document on the letter head of bidder.',
+    requirement: 'Mandatory (On Bidder Letterhead)',
+    applicableDetails: 'Signed undertaking accepting 180-day bid validity, scope of supply and tender rules as per Page 7.',
+    clauseOrPageRef: 'Page 7 (Undertaking of Bidder)',
+    envelope: 'Envelope A: Pre-Qualification',
+    isMandatory: true,
+    checked: previousCheckedMap['chk-2'] ?? !!matchUndertaking,
+    matchedFieldKey: matchUndertaking?.fieldKey || 'bidAnnexures',
+    matchedDocumentName: matchUndertaking?.name,
+  })
+
+  // 3. Scanned copy of original tender document
+  const matchNIT = findMatch(['tendernotice', 'nit', 'tender_doc'])
   dynamicItems.push({
     id: 'chk-3',
-    docName: '3. Audited CA Turnover Certificate & Balance Sheets with UDIN',
+    docName: '3. Scanned copy of original tender document duly signed & with stamp on each page, as a confirmation of acceptance of the Terms & Conditions (T&C).',
     requirement: 'Mandatory',
-    applicableDetails:
-      tender.turnoverRequirement ||
-      tender.bid?.turnoverRequirement ||
-      'Audited turnover for last 3 financial years certified by Chartered Accountant with UDIN',
-    clauseOrPageRef: 'Eligibility Clause: Financial Turnover',
+    applicableDetails: 'Original tender NIT copy stamped and signed on every page confirming unconditional T&C acceptance.',
+    clauseOrPageRef: 'Tender T&C Acceptance',
+    envelope: 'Envelope A: Pre-Qualification',
     isMandatory: true,
-    checked: previousCheckedMap['chk-3'] ?? !!matchTurnover,
-    matchedFieldKey: matchTurnover?.fieldKey || 'turnover',
-    matchedDocumentName: matchTurnover?.name,
+    checked: previousCheckedMap['chk-3'] ?? !!matchNIT,
+    matchedFieldKey: matchNIT?.fieldKey || 'tenderNotice',
+    matchedDocumentName: matchNIT?.name,
   })
 
-  // Item 4: Experience / Work Completion Credentials
-  const matchExp = findMatch(['experience', 'work_order'])
+  // 4. PAN, GSTIN
+  const matchPAN = findMatch(['vendorreg', 'registration', 'gst', 'pan'])
   dynamicItems.push({
     id: 'chk-4',
-    docName: '4. Work Orders, Agreement Copies & Client Completion Certificates',
+    docName: '4. PAN, GSTIN issued in the name of the bidder',
     requirement: 'Mandatory',
-    applicableDetails:
-      tender.experienceRequirement ||
-      tender.bid?.experienceRequirement ||
-      'Satisfactory completion of similar works for Govt. / PSU departments',
-    clauseOrPageRef: 'Eligibility Clause: Technical Experience',
+    applicableDetails: 'Valid GST Registration Certificate (GSTIN) and PAN Card issued in company name.',
+    clauseOrPageRef: 'Section 01, Clause 8',
+    envelope: 'Envelope A: Pre-Qualification',
     isMandatory: true,
-    checked: previousCheckedMap['chk-4'] ?? !!matchExp,
-    matchedFieldKey: matchExp?.fieldKey || 'experience',
-    matchedDocumentName: matchExp?.name,
+    checked: previousCheckedMap['chk-4'] ?? !!matchPAN,
+    matchedFieldKey: matchPAN?.fieldKey || 'vendorReg',
+    matchedDocumentName: matchPAN?.name,
   })
 
-  // Item 5: Vendor & Statutory Registrations
-  const matchReg = findMatch(['vendorreg', 'registration', 'gst'])
+  // 5. Self-certificate not debarred/blacklisted
+  const matchDebar = findMatch(['debar', 'affidavit', 'blacklist', 'bidannexures'])
   dynamicItems.push({
     id: 'chk-5',
-    docName: '5. Firm Registration Certificate, GSTIN Registration & PAN Card',
+    docName: '5. Self-certificate from Bidder for not been debarred/ blacklisted from any Government organisation.',
     requirement: 'Mandatory',
-    applicableDetails: tender.gstSection
-      ? `GST Condition: ${tender.gstSection.slice(0, 80)}...`
-      : 'Valid Certificate of Incorporation, GST Registration, and PAN Card',
-    clauseOrPageRef: 'Statutory Registration Clause',
+    applicableDetails: 'Self-declaration certificate on letterhead confirming no debarment or blacklisting across any state/central Govt.',
+    clauseOrPageRef: 'Section 01, Clause 1(F)',
+    envelope: 'Envelope A: Pre-Qualification',
     isMandatory: true,
-    checked: previousCheckedMap['chk-5'] ?? !!matchReg,
-    matchedFieldKey: matchReg?.fieldKey || 'vendorReg',
-    matchedDocumentName: matchReg?.name,
+    checked: previousCheckedMap['chk-5'] ?? !!matchDebar,
+    matchedFieldKey: matchDebar?.fieldKey || 'bidAnnexures',
+    matchedDocumentName: matchDebar?.name,
   })
 
-  // Item 6: Manufacturer Authorization Form (MAF Letter)
-  const matchMAF = findMatch(['mafletter', 'maf'])
-  const mafReq = tender.mafRequirement || tender.bid?.mafRequirement || 'Required from OEM for critical components'
+  // 6. Declaration of conflict of interest / Annexure - III
+  const matchConflict = findMatch(['conflict', 'annexure_iii', 'affidavit', 'bidannexures'])
   dynamicItems.push({
     id: 'chk-6',
-    docName: '6. Manufacturer Authorization Form (MAF) from OEM on OEM Letterhead',
-    requirement: mafReq.toLowerCase().includes('not required') ? 'Conditional' : 'Mandatory',
-    applicableDetails: mafReq,
-    clauseOrPageRef: 'Technical Clause: OEM MAF Authorization',
-    isMandatory: !mafReq.toLowerCase().includes('not required'),
-    checked: previousCheckedMap['chk-6'] ?? !!matchMAF,
-    matchedFieldKey: matchMAF?.fieldKey || 'mafLetter',
-    matchedDocumentName: matchMAF?.name,
+    docName: '6. Declaration of conflict of interest - by bidder about any relatives working/not working with CREDA along with notarized Affidavit as per Annexure - III',
+    requirement: 'Mandatory (₹100 Notarized Stamp Paper)',
+    applicableDetails: 'Notarized affidavit on ₹100 stamp paper as per Annexure-III declaring no near relatives in CREDA.',
+    clauseOrPageRef: 'Annexure - III (Page 37-38)',
+    envelope: 'Envelope A: Pre-Qualification',
+    isMandatory: true,
+    checked: previousCheckedMap['chk-6'] ?? !!matchConflict,
+    matchedFieldKey: matchConflict?.fieldKey || 'bidAnnexures',
+    matchedDocumentName: matchConflict?.name,
   })
 
-  // Item 7: Laboratory Test Report
-  const matchTest = findMatch(['testreport', 'test'])
+  // 7. Copy of Registration: Certificate as vendors of CREDA
+  const matchVendorReg = findMatch(['vendorreg', 'creda_reg', 'registration'])
   dynamicItems.push({
     id: 'chk-7',
-    docName: '7. Accredited Laboratory Type Test Reports & Technical Quality Certifications',
-    requirement: 'Mandatory',
-    applicableDetails:
-      tender.testReportCompliance ||
-      'NABL / Govt accredited testing laboratory reports meeting specified IS/IEC standards',
-    clauseOrPageRef: 'Technical Compliance Clause',
+    docName: '7. Copy of Registration: Certificate as vendors (Manufacturer or Dealer/Distributor of inverter manufacturer) of CREDA for supply of inverter in CREDA if registered otherwise clause (9) page no 11 shall be applicable for registration.',
+    requirement: 'Mandatory / Conditional',
+    applicableDetails: 'Valid CREDA vendor enlistment certificate or registration undertaking as per clause 9, page 11.',
+    clauseOrPageRef: 'Clause 9 & 11, Page 10-11',
+    envelope: 'Envelope A: Pre-Qualification',
     isMandatory: true,
-    checked: previousCheckedMap['chk-7'] ?? !!matchTest,
+    checked: previousCheckedMap['chk-7'] ?? !!matchVendorReg,
+    matchedFieldKey: matchVendorReg?.fieldKey || 'vendorReg',
+    matchedDocumentName: matchVendorReg?.name,
+  })
+
+  // 8. Valid original Test Reports & MAF summary
+  const matchTest = findMatch(['testreport', 'test', 'nabl'])
+  dynamicItems.push({
+    id: 'chk-8',
+    docName: '8. Valid original Test Reports of Inverter or Consent from the owner of test reports and MAF on behalf of owner. (wherever applicable) along with summary sheet',
+    requirement: 'Mandatory (NABL / MNRE Lab Reports)',
+    applicableDetails: 'Accredited test certificates conforming to IS 16221 / IEC 62109 and IS/IEC 61683 along with summary sheet as per Page 26.',
+    clauseOrPageRef: 'Section 01, Clause 1(A) & Page 26',
+    envelope: 'Envelope B: Technical and Financial Qualification',
+    isMandatory: true,
+    checked: previousCheckedMap['chk-8'] ?? !!matchTest,
     matchedFieldKey: matchTest?.fieldKey || 'testReport',
     matchedDocumentName: matchTest?.name,
   })
 
-  // Item 8: BIS / ISO Standard Certificate
-  const matchBIS = findMatch(['biscertificate', 'bis', 'iso'])
-  dynamicItems.push({
-    id: 'chk-8',
-    docName: '8. Bureau of Indian Standards (BIS) / CRS / ISO Compliance Certificates',
-    requirement: 'Mandatory for solar/electrical equipment',
-    applicableDetails: 'Valid BIS registration / Compulsory Registration Scheme (CRS) license',
-    clauseOrPageRef: 'Quality Standards Clause',
-    isMandatory: true,
-    checked: previousCheckedMap['chk-8'] ?? !!matchBIS,
-    matchedFieldKey: matchBIS?.fieldKey || 'bisCertificate',
-    matchedDocumentName: matchBIS?.name,
-  })
-
-  // Item 9: Product Sample Submission Receipt / Datasheet
-  const matchSample = findMatch(['productsample', 'sample'])
+  // 9. Net Worth Certificate by CA
+  const matchNW = findMatch(['networth', 'ca_cert', 'turnover'])
   dynamicItems.push({
     id: 'chk-9',
-    docName: '9. Product Sample Submission Receipt, Technical Datasheet & Component Specs',
-    requirement: 'Mandatory',
-    applicableDetails: 'Courier challan / department sample deposit slip & product schedule',
-    clauseOrPageRef: 'Physical Sample Clause',
+    docName: '9. Attested copy of Original Net Worth Certificate duly signed by Chartered Accountant as on 31st March 2025/2026.',
+    requirement: 'Mandatory (Positive Net Worth >= ₹25 Lakhs)',
+    applicableDetails: 'CA Certified Net Worth Certificate with UDIN proving positive net worth >= Rs. 25 Lacs as on 31st March 2025/2026.',
+    clauseOrPageRef: 'Section 01, Clause 1(D)',
+    envelope: 'Envelope B: Technical and Financial Qualification',
     isMandatory: true,
-    checked: previousCheckedMap['chk-9'] ?? !!matchSample,
-    matchedFieldKey: matchSample?.fieldKey || 'productSample',
-    matchedDocumentName: matchSample?.name,
+    checked: previousCheckedMap['chk-9'] ?? !!matchNW,
+    matchedFieldKey: matchNW?.fieldKey || 'turnover',
+    matchedDocumentName: matchNW?.name,
   })
 
-  // Item 10: Signed Bid Submission Formats & Affidavits
-  const matchAnnex = findMatch(['bidannexures', 'annexure', 'format'])
+  // 10. Turn Over certificate by CA
+  const matchTurnover = findMatch(['turnover', 'ca_cert'])
   dynamicItems.push({
     id: 'chk-10',
-    docName: '10. Stamped & Signed Bid Formats, Undertakings & Non-Blacklisting Affidavit',
-    requirement: 'Mandatory (on ₹100 Notarized Stamp Paper)',
-    applicableDetails: 'Format-1 (Submission Letter), Format-2 (Power of Attorney), Format-5 & Non-Blacklisting Affidavit',
-    clauseOrPageRef: 'Annexures & Formats Section',
+    docName: '10. Attested copy of Original Turn Over certificate in last three financial years i.e. 2022-23, 2023-24, 2024-25 & 2025-26 works done in the field of Inverter',
+    requirement: 'Mandatory (Min ₹50 Lakhs in Inverters)',
+    applicableDetails: 'Audited CA Turnover Certificate with UDIN and audited balance sheets for last 3 financial years.',
+    clauseOrPageRef: 'Section 01, Clause 1(E)',
+    envelope: 'Envelope B: Technical and Financial Qualification',
     isMandatory: true,
-    checked: previousCheckedMap['chk-10'] ?? !!matchAnnex,
-    matchedFieldKey: matchAnnex?.fieldKey || 'bidAnnexures',
-    matchedDocumentName: matchAnnex?.name,
+    checked: previousCheckedMap['chk-10'] ?? !!matchTurnover,
+    matchedFieldKey: matchTurnover?.fieldKey || 'turnover',
+    matchedDocumentName: matchTurnover?.name,
   })
 
-  // Item 11: DSC Token Encryption & Portal Specific Authorization
-  const matchOther = findMatch(['otherportal', 'dsc'])
+  // 11. Copy of ITRs for last 03 financial years
+  const matchITR = findMatch(['itr', 'turnover', 'ca_cert'])
   dynamicItems.push({
     id: 'chk-11',
-    docName: '11. Portal Upload Summary, DSC Class-3 Token Encryption & Integrity Pact',
-    requirement: 'Mandatory for e-Procurement Portal',
-    applicableDetails: 'Class-3 Digital Signature Certificate (DSC) verification & portal acknowledgement',
-    clauseOrPageRef: 'e-Bidding Portal Instructions',
+    docName: '11. Copy of ITRs for in last 03 financial years i.e. 2022-23, 2023-24, 2024-25 & 2025-26 of the Bidder.',
+    requirement: 'Mandatory',
+    applicableDetails: 'Certified Income Tax Return (ITR-V / Acknowledgments) for the preceding 3 assessment years.',
+    clauseOrPageRef: 'Section 01, Clause 1(E)',
+    envelope: 'Envelope B: Technical and Financial Qualification',
     isMandatory: true,
-    checked: previousCheckedMap['chk-11'] ?? !!matchOther,
-    matchedFieldKey: matchOther?.fieldKey || 'otherPortal',
-    matchedDocumentName: matchOther?.name,
+    checked: previousCheckedMap['chk-11'] ?? !!matchITR,
+    matchedFieldKey: matchITR?.fieldKey || 'turnover',
+    matchedDocumentName: matchITR?.name,
+  })
+
+  // 12. Completion and Performance Certificates
+  const matchExp = findMatch(['experience', 'work_order', 'completion'])
+  dynamicItems.push({
+    id: 'chk-12',
+    docName: '12. Completion and Performance Certificates of Solar Off-Grid Inverters to any Central Government/State Government Department, Government Agency, Government Organization, Public Sector Undertaking (PSU), or Government-owned Entity, either directly or through the supply of Solar Photovoltaic Power Plants (SPVPP) in any three out of last 05 years 2021-22, 2022-23, 2023-24 ,2024-25 & 2025-26.',
+    requirement: 'Mandatory (Min 200 KW/KVA Supply)',
+    applicableDetails: 'Government / PSU client completion certificates in Annexure-II format with installation & commissioning proof.',
+    clauseOrPageRef: 'Section 01, Clause 1(B) & Annexure-II',
+    envelope: 'Envelope B: Technical and Financial Qualification',
+    isMandatory: true,
+    checked: previousCheckedMap['chk-12'] ?? !!matchExp,
+    matchedFieldKey: matchExp?.fieldKey || 'experience',
+    matchedDocumentName: matchExp?.name,
+  })
+
+  // 13. Proof of being Eligible Manufacturer
+  const matchMfg = findMatch(['manufacturer', 'ssi', 'dic', 'factory'])
+  dynamicItems.push({
+    id: 'chk-13',
+    docName: '13. Proof of being Eligible Manufacturer of Solar Off-grid Inverter in the name of manufacturer.',
+    requirement: 'Mandatory for OEM',
+    applicableDetails: 'Factory license, DIC / SSI / Udyam registration, and list of plant machinery & testing equipment.',
+    clauseOrPageRef: 'Section 02, Clause 2 (Proof of Manufacturer)',
+    envelope: 'Envelope B: Technical and Financial Qualification',
+    isMandatory: true,
+    checked: previousCheckedMap['chk-13'] ?? !!matchMfg,
+    matchedFieldKey: matchMfg?.fieldKey || 'vendorReg',
+    matchedDocumentName: matchMfg?.name,
+  })
+
+  // 14. Manufacture Authorization certificates (MAF)
+  const matchMAF = findMatch(['mafletter', 'maf', 'oem'])
+  dynamicItems.push({
+    id: 'chk-14',
+    docName: '14. Manufacture Authorization certificates of Solar Off-grid Inverter (mandatory in case of authorised dealer/distributor)',
+    requirement: 'Mandatory (for Authorized Dealer / Distributor)',
+    applicableDetails: 'OEM authorization letter on manufacturer letterhead guaranteeing equipment supply & 5-year onsite warranty.',
+    clauseOrPageRef: 'Section 01, Clause 4 & Section 02, Clause 13',
+    envelope: 'Envelope B: Technical and Financial Qualification',
+    isMandatory: true,
+    checked: previousCheckedMap['chk-14'] ?? !!matchMAF,
+    matchedFieldKey: matchMAF?.fieldKey || 'mafLetter',
+    matchedDocumentName: matchMAF?.name,
+  })
+
+  // 15. Undertaking on indigenousness of components
+  const matchIndig = findMatch(['indigenous', 'dcr', 'undertaking', 'bidannexures'])
+  dynamicItems.push({
+    id: 'chk-15',
+    docName: '15. Undertaking on indigenousness of components',
+    requirement: 'Mandatory',
+    applicableDetails: 'Self-declaration on letterhead that off-grid inverter, charge controller & BOS are made in India.',
+    clauseOrPageRef: 'Section 02, Clause 12',
+    envelope: 'Envelope B: Technical and Financial Qualification',
+    isMandatory: true,
+    checked: previousCheckedMap['chk-15'] ?? !!matchIndig,
+    matchedFieldKey: matchIndig?.fieldKey || 'bidAnnexures',
+    matchedDocumentName: matchIndig?.name,
+  })
+
+  // 16. Undertaking for remaining test reports / sample fee receipt
+  const matchSampleUndertaking = findMatch(['sample_fee', 'sample', 'test_undertaking', 'testreport'])
+  dynamicItems.push({
+    id: 'chk-16',
+    docName: '16. Undertaking for the remaining test reports (for which acknowledgements have been submitted) submission within 90 days from the date of agreement if applicable. 1. Acknowledge of sample fee receipt if applicable 2.Written consent for the use of test report from manufacturer',
+    requirement: 'Conditional (if testing in progress)',
+    applicableDetails: 'Sample fee receipt acknowledgment from MNRE/NABL test center & undertaking to submit within 90 days.',
+    clauseOrPageRef: 'Section 01, Clause 1(A), Page 8',
+    envelope: 'Envelope B: Technical and Financial Qualification',
+    isMandatory: false,
+    checked: previousCheckedMap['chk-16'] ?? !!matchSampleUndertaking,
+    matchedFieldKey: matchSampleUndertaking?.fieldKey || 'testReport',
+    matchedDocumentName: matchSampleUndertaking?.name,
+  })
+
+  // 17. Schedule – I Part-A
+  const matchSch1 = findMatch(['schedule_i', 'sch1', 'general_info', 'bidannexures'])
+  dynamicItems.push({
+    id: 'chk-17',
+    docName: '17. Schedule – I Part-A',
+    requirement: 'Mandatory (General Information Form)',
+    applicableDetails: 'Duly filled Schedule-I Part-A containing bidder profile, factory particulars, and SSI registration details.',
+    clauseOrPageRef: 'Page 31 (Schedule - I Part A)',
+    envelope: 'Envelope B: Technical and Financial Qualification',
+    isMandatory: true,
+    checked: previousCheckedMap['chk-17'] ?? !!matchSch1,
+    matchedFieldKey: matchSch1?.fieldKey || 'bidAnnexures',
+    matchedDocumentName: matchSch1?.name,
+  })
+
+  // 18. Schedule – II Part-B
+  const matchSch2 = findMatch(['schedule_ii', 'sch2', 'commercial_info', 'bidannexures'])
+  dynamicItems.push({
+    id: 'chk-18',
+    docName: '18. Schedule – II Part-B',
+    requirement: 'Mandatory (Commercial Information Form)',
+    applicableDetails: 'Duly filled Schedule-II Part-B confirming EMD details, validity, payment terms, and penalty clause acceptance.',
+    clauseOrPageRef: 'Page 32 (Schedule - II Part B)',
+    envelope: 'Envelope B: Technical and Financial Qualification',
+    isMandatory: true,
+    checked: previousCheckedMap['chk-18'] ?? !!matchSch2,
+    matchedFieldKey: matchSch2?.fieldKey || 'bidAnnexures',
+    matchedDocumentName: matchSch2?.name,
+  })
+
+  // 19. Schedule – III Part-C
+  const matchSch3 = findMatch(['schedule_iii', 'sch3', 'technical_info', 'bidannexures'])
+  dynamicItems.push({
+    id: 'chk-19',
+    docName: '19. Schedule – III Part-C',
+    requirement: 'Mandatory (Technical Information Form)',
+    applicableDetails: 'Duly filled Schedule-III Part-C technical parameters, manufacturing process, and in-house testing facility details.',
+    clauseOrPageRef: 'Page 33 (Schedule - III Part C)',
+    envelope: 'Envelope B: Technical and Financial Qualification',
+    isMandatory: true,
+    checked: previousCheckedMap['chk-19'] ?? !!matchSch3,
+    matchedFieldKey: matchSch3?.fieldKey || 'bidAnnexures',
+    matchedDocumentName: matchSch3?.name,
+  })
+
+  // 20. Technical Data Sheet for each category of inverter/PCU
+  const matchDatasheet = findMatch(['datasheet', 'technical_data', 'productsample', 'sample'])
+  dynamicItems.push({
+    id: 'chk-20',
+    docName: '20. Technical Data Sheet for each category of inverter/PCU showing full technical details',
+    requirement: 'Mandatory (All Offered Capacities 0.5 to 100 KVA)',
+    applicableDetails: 'Complete technical datasheet covering nominal voltage, MPPT range, surge rating, efficiency, and THD.',
+    clauseOrPageRef: 'Section 03 & Section 04 Page 25',
+    envelope: 'Envelope B: Technical and Financial Qualification',
+    isMandatory: true,
+    checked: previousCheckedMap['chk-20'] ?? !!matchDatasheet,
+    matchedFieldKey: matchDatasheet?.fieldKey || 'productSample',
+    matchedDocumentName: matchDatasheet?.name,
+  })
+
+  // 21. Details of Service centres in Chhattisgarh
+  const matchService = findMatch(['service_centre', 'service', 'otherportal', 'support'])
+  dynamicItems.push({
+    id: 'chk-21',
+    docName: '21. Details of Service centres in Chhattisgarh',
+    requirement: 'Mandatory (Raipur Authorized Service Center)',
+    applicableDetails: 'Proof of authorized service station at Raipur with spares stock and dedicated technical manpower.',
+    clauseOrPageRef: 'Section 01, Clause 1(H) & Page 16',
+    envelope: 'Envelope B: Technical and Financial Qualification',
+    isMandatory: true,
+    checked: previousCheckedMap['chk-21'] ?? !!matchService,
+    matchedFieldKey: matchService?.fieldKey || 'otherPortal',
+    matchedDocumentName: matchService?.name,
   })
 
   return dynamicItems
 }
 
+function emdDetailText(tender: Tender, emdFallback: string): string {
+  if (tender.emdReady?.utrNumber) {
+    return `UTR: ${tender.emdReady.utrNumber} (${tender.emdReady.amount || emdFallback})`
+  }
+  return emdFallback
+}
+
 /**
- * Checks whether the current checklist is using the legacy 11-item hardcoded/heuristic list,
+ * Checks whether the current checklist is using an outdated or incomplete list (< 21 items),
  * meaning it should be upgraded automatically when opening the modal or on refresh.
  */
 export function isOldFallbackChecklist(items?: PortalChecklistItem[]): boolean {
   if (!items || items.length === 0) return true
-  if (items.length <= 11 && items.some(it => it.id === 'chk-1' || it.id === 'chk-11')) {
+  if (items.length < 21) {
     return true
   }
   return false

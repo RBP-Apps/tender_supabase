@@ -11,6 +11,7 @@ import {
   deleteTenderFromSupabase,
   saveSelfAccountToSupabase,
   deleteSelfAccountFromSupabase,
+  updateSelfAccountInSupabase,
   addMasterCategoryToSupabase,
   deleteMasterCategoryFromSupabase,
   checkSupabaseHealth,
@@ -52,7 +53,7 @@ interface TenderContextType {
   advanceStage: (id: string, targetStage?: Stage, targetStatus?: Status, remarks?: string) => void
   setMasters: React.Dispatch<React.SetStateAction<Masters>>
   selfAccounts: BankAccountDetails[]
-  saveSelfAccount: (account: BankAccountDetails) => void
+  saveSelfAccount: (account: BankAccountDetails, oldAccountNo?: string) => void
   deleteSelfAccount: (accountNo: string) => void
   companyDocs: CompanyMasterDocuments
   saveCompanyDoc: (key: keyof CompanyMasterDocuments, doc: CompanyDocumentItem | null) => void
@@ -531,9 +532,10 @@ export function TenderProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
-  const saveSelfAccount = (account: BankAccountDetails) => {
+  const saveSelfAccount = (account: BankAccountDetails, oldAccountNo?: string) => {
     setSelfAccounts(prev => {
-      const idx = prev.findIndex(a => a.accountNo === account.accountNo)
+      const targetNo = oldAccountNo || account.accountNo
+      const idx = prev.findIndex(a => a.accountNo === targetNo)
       let updated: BankAccountDetails[]
       if (idx >= 0) {
         updated = [...prev]
@@ -546,7 +548,11 @@ export function TenderProvider({ children }: { children: React.ReactNode }) {
 
     notify(`Saving account ${account.bankName} to database...`)
 
-    saveSelfAccountToSupabase(account)
+    const syncPromise = oldAccountNo && oldAccountNo !== account.accountNo
+      ? updateSelfAccountInSupabase(oldAccountNo, account)
+      : saveSelfAccountToSupabase(account)
+
+    syncPromise
       .then(() => {
         setSupabaseConnected(true)
         notify(`Account saved to Supabase`)
@@ -584,6 +590,9 @@ export function TenderProvider({ children }: { children: React.ReactNode }) {
       turnoverDoc: 'Turnover Document',
       networthDoc: 'Networth Document',
       experienceDoc: 'Experience / Work Completion Certificate',
+      signatureDoc: 'Authorised Signatory / Signature',
+      sealDoc: 'Company Seal / Stamp',
+      signatureSealDoc: 'Signature and Seal',
     }
     notify(doc ? `${titleMap[key]} saved successfully` : `${titleMap[key]} removed`)
 
