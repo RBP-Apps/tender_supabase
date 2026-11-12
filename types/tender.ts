@@ -64,6 +64,27 @@ export interface SampleDocumentItem {
   matchConfidence?: 'high' | 'medium' | 'low'
   letterContent?: any
   textContent?: string
+  requirementStatus?: 'Required' | 'Not Required' | 'Optional'
+  requirementReason?: string
+  requirementClause?: string
+}
+
+export interface FieldRequirementAudit {
+  isRequired: boolean
+  status: 'Required' | 'Not Required' | 'Optional'
+  clauseOrRef: string
+  reasoning: string
+  applicableStandards: string[]
+  confidence: 'high' | 'medium'
+}
+
+export interface SampleRequirementsAudit {
+  testReport: FieldRequirementAudit
+  bisCertificate: FieldRequirementAudit
+  productSample?: FieldRequirementAudit
+  checkedAt?: string
+  sourceType?: 'tender-pdf' | 'tender-metadata' | 'heuristic'
+  summary?: string
 }
 
 export interface SampleDetailsHistoryEntry {
@@ -79,6 +100,7 @@ export interface SampleDetailsHistoryEntry {
   previousStage?: Stage
   advancedToStage?: Stage
   updateSummary?: string
+  aiRequirementsAudit?: SampleRequirementsAudit
 }
 
 export interface SampleDetailsData {
@@ -91,6 +113,7 @@ export interface SampleDetailsData {
   completedAt?: string
   completedBy?: string
   history?: SampleDetailsHistoryEntry[]
+  aiRequirementsAudit?: SampleRequirementsAudit
 }
 
 export interface EligibilityDocument {
@@ -102,6 +125,54 @@ export interface EligibilityDocument {
   letterContent?: any
 }
 
+export interface CriteriaEvaluationDetail {
+  criteriaName: string
+  status: 'Pass' | 'Fail' | 'Pending' | 'Under Review'
+  tenderRequirement: string
+  userSubmitted: string
+  comparisonResult: string
+  rejectionReason?: string
+  isMandatory: boolean
+}
+
+export interface AIEligibilityVerification {
+  status: 'Eligible' | 'Not Eligible' | 'Partially Eligible'
+  verifiedAt: string
+  score: number // e.g. 100, 80, 40
+  summary: string
+  overallReasoning?: string
+  conclusion?: string
+  matchedCriteria?: string[]
+  failedCriteria?: string[]
+  missingRequirements?: string[]
+  insufficientInfoNotes?: string
+  criteriaBreakdown?: CriteriaEvaluationDetail[]
+  tenderRequirements?: {
+    turnover?: string
+    experience?: string
+    statutory?: string
+  }
+  turnoverCheck: {
+    status: 'Pass' | 'Fail' | 'Pending' | 'Under Review'
+    required?: string
+    submitted?: string
+    notes?: string
+    shortfallOrSurplus?: string
+  }
+  experienceCheck: {
+    status: 'Pass' | 'Fail' | 'Pending' | 'Under Review'
+    required?: string
+    submitted?: string
+    notes?: string
+    shortfallOrSurplus?: string
+  }
+  documentsCheck: {
+    status: 'Pass' | 'Fail' | 'Pending' | 'Under Review'
+    notes?: string
+    missingDocs?: string[]
+  }
+}
+
 export interface EligibilityCheckData {
   turnoverDoc?: EligibilityDocument | null
   experienceDoc?: EligibilityDocument | null
@@ -109,6 +180,7 @@ export interface EligibilityCheckData {
   otherDoc?: EligibilityDocument | null
   remarks?: string
   completedAt?: string
+  aiVerification?: AIEligibilityVerification
 }
 
 export interface CompanyDocumentItem {
@@ -198,6 +270,7 @@ export interface DocumentReadyData {
   checklistTitle?: string
   checklistSource?: string
   checklistDocs?: PortalUploadDocumentItem[]
+  combinedWordSummary?: any
   remarks?: string
   completedAt?: string
   completedBy?: string
@@ -433,6 +506,9 @@ export interface CorrigendumRecord {
   issueDate?: string | null // YYYY-MM-DD
   tenderRef?: string | null // reference number quoted in the corrigendum
   fileName: string
+  fileUrl?: string | null
+  dataUrl?: string | null
+  fileSize?: number | null
   uploadedAt: string // ISO timestamp
   overview: string
   changes: CorrigendumChangeItem[]

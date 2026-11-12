@@ -21,6 +21,7 @@ import { SampleDocumentItem, Status, Tender } from '@/types/tender'
 import { SampleDetailsModal } from '@/components/modals/SampleDetailsModal'
 import { TenderModal } from '@/components/modals/TenderModal'
 import { DocumentPreviewModal } from '@/components/common/DocumentPreviewModal'
+import { TenderNumberBadge } from '@/components/ui/TenderNumberBadge'
 import {
   downloadSampleDocx,
   generateSampleFieldContents,
@@ -121,6 +122,16 @@ function renderSampleDocCell(
     onPreview?.(effectiveDoc)
   }
 
+  const reqStatus =
+    effectiveDoc.requirementStatus ||
+    (fieldKey === 'testReport'
+      ? tender?.sampleDetails?.aiRequirementsAudit?.testReport?.status
+      : fieldKey === 'bisCertificate'
+      ? tender?.sampleDetails?.aiRequirementsAudit?.bisCertificate?.status
+      : fieldKey === 'productSample'
+      ? tender?.sampleDetails?.aiRequirementsAudit?.productSample?.status
+      : undefined)
+
   return (
     <div className="flex flex-col gap-1 min-w-[130px] max-w-[200px]">
       <div className="flex items-center gap-1.5">
@@ -133,7 +144,20 @@ function renderSampleDocCell(
           {effectiveDoc.name}
         </span>
       </div>
-      <div className="flex items-center gap-2 text-[10px]">
+      <div className="flex items-center gap-1.5 flex-wrap text-[10px]">
+        {reqStatus ? (
+          <span
+            className={`px-1.5 py-0.2 rounded font-extrabold text-[9px] shadow-2xs ${
+              reqStatus === 'Required'
+                ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                : reqStatus === 'Not Required'
+                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                : 'bg-amber-50 text-amber-700 border border-amber-200'
+            }`}
+          >
+            {reqStatus === 'Required' ? '🔴 Mandatory' : '🟢 Not Required'}
+          </span>
+        ) : null}
         {effectiveDoc.source === 'auto-fetched' || effectiveDoc.source === 'eligibility-docs' ? (
           <span className="text-blue-700 font-bold">✨ Auto</span>
         ) : (
@@ -396,11 +420,19 @@ export default function SampleDetailsPage() {
                     {/* Tender Details */}
                     <td>
                       <div className="tender-name min-w-[170px] max-w-[240px]">
-                        <strong className="block text-slate-900 truncate" title={t.title}>
+                        <div className="mb-1 flex items-center gap-1.5 flex-wrap">
+                          <TenderNumberBadge id={t.id} />
+                          {t.value && (
+                            <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200/80">
+                              {t.value}
+                            </span>
+                          )}
+                        </div>
+                        <strong className="block text-slate-900 truncate text-xs" title={t.title}>
                           {t.title}
                         </strong>
-                        <small className="text-slate-500">
-                          {t.id} · {t.authority} {t.value ? `· ${t.value}` : ''}
+                        <small className="text-slate-500 text-[11px] block mt-0.5">
+                          {t.authority}
                         </small>
                       </div>
                     </td>

@@ -21,6 +21,7 @@ import {
 import { Tender } from '@/types/tender'
 import { useTenders } from '@/context/TenderContext'
 import { TechnicalOpenCheckModal } from '@/components/modals/TechnicalOpenCheckModal'
+import { TenderNumberBadge } from '@/components/ui/TenderNumberBadge'
 
 function ExpandableRemarkCell({ text }: { text?: string | null }) {
   const [expanded, setExpanded] = useState(false)
@@ -285,15 +286,19 @@ export default function TechnicalOpenCheckPage() {
                       {/* Tender Name & ID */}
                       <td>
                         <div className="tender-name min-w-[200px] max-w-[280px]">
-                          <strong className="block text-slate-900 truncate" title={t.title}>
+                          <div className="mb-1 flex items-center gap-1.5 flex-wrap">
+                            <TenderNumberBadge id={t.id} />
+                            {t.value && (
+                              <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200/80">
+                                {t.value}
+                              </span>
+                            )}
+                          </div>
+                          <strong className="block text-slate-900 truncate text-xs" title={t.title}>
                             {t.title}
                           </strong>
                           <div className="flex items-center gap-2 mt-1">
-                            <span className="text-slate-400 font-mono text-[11px]">
-                              {t.id}
-                            </span>
-                            <span className="text-slate-300">•</span>
-                            <span className="text-slate-600 text-[11px] truncate" title={t.authority}>
+                            <span className="text-slate-500 text-[11px] truncate" title={t.authority}>
                               {t.authority}
                             </span>
                           </div>
@@ -390,7 +395,7 @@ export default function TechnicalOpenCheckPage() {
                           <td>
                             <div className="text-xs text-slate-700">
                               <span className="font-medium block">
-                                {t.bid?.bidDeadlineDate || t.due?.slice(0, 10) || 'Scheduled'}
+                                {(t.bid as any)?.bidDeadlineDate || t.due?.slice(0, 10) || 'Scheduled'}
                               </span>
                               <span className="text-[11px] text-slate-500">
                                 {t.bid?.bidDeadlineTime || '15:30 Hrs'}

@@ -548,7 +548,7 @@ Checklist Verification: COMPLIANT & APPROVED
       categoryLabel: item.envelope || 'Tender Checklist Requirement',
       stageOrigin: item.clauseOrPageRef || 'Stage 05 Document Ready',
       fileName: doc.name,
-      fileType: doc.type,
+      fileType: doc.type || 'application/pdf',
       fileTypeGroup: detectFileTypeGroup(doc.name, doc.type),
       fileSize: doc.size,
       uploadedAt: doc.uploadedAt,

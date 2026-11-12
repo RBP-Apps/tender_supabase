@@ -8,6 +8,7 @@ import {
   ChevronUp,
   Clock3,
   Download,
+  ExternalLink,
   Eye,
   FileText,
   Layers,
@@ -18,6 +19,7 @@ import {
 } from 'lucide-react'
 import { Status, Tender } from '@/types/tender'
 import { TenderDetailsViewModal } from '@/components/modals/TenderDetailsViewModal'
+import { TenderNumberBadge } from '@/components/ui/TenderNumberBadge'
 
 interface TenderTableProps {
   tenders: Tender[]
@@ -114,6 +116,86 @@ function ExpandableTextCell({
 }
 
 /**
+ * Corrigendum display cell: renders structured corrigenda records (with dates, badges, and PDF links)
+ * and falls back to bid.corrigendum text.
+ */
+function CorrigendumCell({
+  tender,
+  onOpenModal,
+}: {
+  tender: Tender
+  onOpenModal?: () => void
+}) {
+  const bid = tender.bid
+  const corrigenda = tender.corrigenda || []
+  const textValue = (bid?.corrigendum || '').trim()
+
+  // 1. If we have structured corrigenda records from PDF uploads / AI extraction
+  if (corrigenda.length > 0) {
+    return (
+      <div className="space-y-1.5 min-w-[160px] max-w-[260px]">
+        {corrigenda.map((c, idx) => {
+          const fileLink = c.fileUrl || c.dataUrl
+          return (
+            <div key={c.id || idx} className="flex items-center gap-1.5 flex-wrap">
+              <span
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-purple-50 text-purple-700 border border-purple-200 shadow-2xs hover:bg-purple-100 transition-colors cursor-pointer"
+                title={c.overview ? `${c.corrigendumNo}: ${c.overview}` : c.corrigendumNo}
+                onClick={onOpenModal}
+              >
+                <FileText className="w-3 h-3 text-purple-500 shrink-0" />
+                <span className="font-mono">{c.corrigendumNo || `Corrigendum-${idx + 1}`}</span>
+              </span>
+              {c.issueDate && (
+                <span className="text-[10px] text-slate-500 font-mono" title={`Issue Date: ${c.issueDate}`}>
+                  {c.issueDate}
+                </span>
+              )}
+              {fileLink && (
+                <a
+                  href={fileLink}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-purple-600 hover:text-purple-800 p-0.5 rounded hover:bg-purple-100 transition-colors inline-flex items-center"
+                  title={`View ${c.fileName || c.corrigendumNo} PDF in new tab`}
+                  onClick={e => e.stopPropagation()}
+                >
+                  <ExternalLink className="w-3 h-3" />
+                </a>
+              )}
+            </div>
+          )
+        })}
+        {/* If user also entered manual text that isn't redundant */}
+        {textValue && !corrigenda.some(c => textValue.toLowerCase().includes(c.corrigendumNo.toLowerCase())) && (
+          <div className="text-[11px] text-slate-600 line-clamp-1 italic" title={textValue}>
+            {textValue}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // 2. If we only have plain text string in bid.corrigendum
+  if (textValue) {
+    return (
+      <div className="min-w-[140px] max-w-[240px]">
+        <span
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100 transition-colors cursor-pointer"
+          onClick={onOpenModal}
+        >
+          <FileText className="w-3 h-3 text-purple-500 shrink-0" />
+          <span className="truncate max-w-[190px]" title={textValue}>{textValue}</span>
+        </span>
+      </div>
+    )
+  }
+
+  // 3. Fallback: None
+  return <span className="text-slate-300 italic text-xs">—</span>
+}
+
+/**
  * Export tender records to CSV
  */
 function exportTendersToCsv(tenders: Tender[]) {
@@ -178,7 +260,10 @@ function exportTendersToCsv(tenders: Tender[]) {
       bid?.technicalRequirement || '',
       bid?.rfsNo || '',
       bid?.rfsDate || '',
-      bid?.corrigendum || '',
+      bid?.corrigendum ||
+        (t.corrigenda && t.corrigenda.length > 0
+          ? t.corrigenda.map(c => `${c.corrigendumNo}${c.issueDate ? ` (${c.issueDate})` : ''}`).join('; ')
+          : ''),
       bid?.addresseeDesignation || '',
       bid?.authorityAddress || '',
       bid?.workName || '',
@@ -416,12 +501,17 @@ export function TenderTable({
                     {/* Tender ID & Title */}
                     <td>
                       <div className="tender-name max-w-[280px]">
-                        <strong className="text-slate-900 block truncate" title={t.title}>
+                        <div className="mb-1 flex items-center gap-1.5 flex-wrap">
+                          <TenderNumberBadge id={t.id} />
+                          {t.value && (
+                            <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200/80">
+                              {t.value}
+                            </span>
+                          )}
+                        </div>
+                        <strong className="text-slate-900 block truncate text-xs" title={t.title}>
                           {t.title}
                         </strong>
-                        <small className="text-slate-500 font-mono text-[11px] block mt-0.5">
-                          {t.id} {t.value ? `· ${t.value}` : ''}
-                        </small>
                       </div>
                     </td>
 
@@ -541,12 +631,18 @@ export function TenderTable({
                         </td>
 
                         {/* RfS No & Date */}
-                        <td className="text-xs font-mono text-slate-800 font-semibold">{bid?.rfsNo || '—'}</td>
+                        <td className="text-xs">
+                          {bid?.rfsNo ? (
+                            <TenderNumberBadge id={bid.rfsNo} prefix="RfS:" variant="indigo" />
+                          ) : (
+                            <span className="text-slate-300 italic">—</span>
+                          )}
+                        </td>
                         <td className="text-xs text-slate-600 font-mono">{bid?.rfsDate || '—'}</td>
 
                         {/* Corrigendum */}
                         <td className="text-xs text-slate-700 font-medium">
-                          <ExpandableTextCell text={bid?.corrigendum} maxChars={60} />
+                          <CorrigendumCell tender={t} onOpenModal={() => setSelectedTender(t)} />
                         </td>
 
                         {/* Addressee Designation */}

@@ -22,6 +22,7 @@ import { Stage, Status, Tender } from '@/types/tender'
 import { useTenders } from '@/context/TenderContext'
 import { SubmitInWebsiteModal } from '@/components/modals/SubmitInWebsiteModal'
 import { TenderModal } from '@/components/modals/TenderModal'
+import { TenderNumberBadge } from '@/components/ui/TenderNumberBadge'
 
 function statusTone(status: Status) {
   switch (status) {
@@ -302,11 +303,19 @@ export default function SubmitInWebsitePage() {
                       {/* Tender Name & ID */}
                       <td>
                         <div className="tender-name min-w-[200px] max-w-[280px]">
-                          <strong className="block text-slate-900 truncate" title={t.title}>
+                          <div className="mb-1 flex items-center gap-1.5 flex-wrap">
+                            <TenderNumberBadge id={t.id} />
+                            {t.value && (
+                              <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200/80">
+                                {t.value}
+                              </span>
+                            )}
+                          </div>
+                          <strong className="block text-slate-900 truncate text-xs" title={t.title}>
                             {t.title}
                           </strong>
-                          <small className="text-slate-500 font-mono text-[11px] block mt-0.5">
-                            {t.id} · {t.authority} {t.value ? `· ${t.value}` : ''}
+                          <small className="text-slate-500 text-[11px] block mt-0.5">
+                            {t.authority}
                           </small>
                         </div>
                       </td>

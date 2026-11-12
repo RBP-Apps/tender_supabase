@@ -4,6 +4,7 @@ import React, { useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import {
+  AlertTriangle,
   ArrowRight,
   CheckCircle2,
   Clock3,
@@ -11,14 +12,20 @@ import {
   Eye,
   FileCheck,
   FileText,
+  Info,
+  Loader2,
   Pencil,
   Search,
+  ShieldCheck,
+  Sparkles,
+  X,
 } from 'lucide-react'
 import { useTenders } from '@/context/TenderContext'
-import { Status, Tender } from '@/types/tender'
+import { AIEligibilityVerification, Status, Tender } from '@/types/tender'
 import { EligibilityCheckModal } from '@/components/modals/EligibilityCheckModal'
 import { TenderModal } from '@/components/modals/TenderModal'
 import { DocumentPreviewModal } from '@/components/common/DocumentPreviewModal'
+import { TenderNumberBadge } from '@/components/ui/TenderNumberBadge'
 
 function statusTone(status: Status) {
   switch (status) {
@@ -189,6 +196,92 @@ function ExpandableRemarkCell({ text }: { text?: string | null }) {
   )
 }
 
+function renderAiEligibilityCell(
+  aiVerification?: AIEligibilityVerification,
+  onViewReport?: () => void,
+  onRunCheck?: () => void,
+  isRunning?: boolean
+) {
+  if (!aiVerification) {
+    return (
+      <div className="flex flex-col gap-1 items-start min-w-[140px]">
+        <span className="text-xs text-slate-400 italic">— Pending AI Check —</span>
+        {onRunCheck && (
+          <button
+            type="button"
+            disabled={isRunning}
+            onClick={e => {
+              e.stopPropagation()
+              onRunCheck()
+            }}
+            className="text-[11px] text-indigo-600 hover:text-indigo-800 font-semibold underline inline-flex items-center gap-1 cursor-pointer disabled:opacity-50"
+          >
+            {isRunning ? (
+              <>
+                <Loader2 className="w-3 h-3 animate-spin" /> Verifying...
+              </>
+            ) : (
+              <>
+                <Sparkles className="w-3 h-3 text-indigo-500" /> Verify with AI
+              </>
+            )}
+          </button>
+        )}
+      </div>
+    )
+  }
+
+  const isEligible = aiVerification.status === 'Eligible'
+  const isPartially = aiVerification.status === 'Partially Eligible'
+
+  return (
+    <div className="flex flex-col gap-1.5 items-start min-w-[150px]">
+      <div className="flex items-center gap-1.5">
+        <span
+          className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold shadow-2xs ${
+            isEligible
+              ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+              : isPartially
+              ? 'bg-amber-100 text-amber-800 border border-amber-300'
+              : 'bg-rose-100 text-rose-800 border border-rose-300'
+          }`}
+        >
+          {isEligible ? (
+            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+          ) : isPartially ? (
+            <Clock3 className="w-3.5 h-3.5 text-amber-600" />
+          ) : (
+            <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
+          )}
+          {aiVerification.status}
+        </span>
+        {aiVerification.score !== undefined && (
+          <span className="text-[10px] font-semibold text-slate-500">
+            {aiVerification.score}%
+          </span>
+        )}
+      </div>
+
+      <p className="text-[11px] text-slate-600 line-clamp-1 max-w-[190px]" title={aiVerification.summary}>
+        {aiVerification.summary}
+      </p>
+
+      {onViewReport && (
+        <button
+          type="button"
+          onClick={e => {
+            e.stopPropagation()
+            onViewReport()
+          }}
+          className="text-[10px] text-indigo-600 hover:text-indigo-800 font-bold underline inline-flex items-center gap-1 cursor-pointer"
+        >
+          <Sparkles className="w-3 h-3 text-indigo-500" /> View Detailed Reasoning
+        </button>
+      )}
+    </div>
+  )
+}
+
 export default function EligibilityCheckPage() {
   const { tenders, masters, updateTender, deleteTender, notify } = useTenders()
   const router = useRouter()
@@ -200,6 +293,10 @@ export default function EligibilityCheckPage() {
     tender: Tender
     mode: 'verify' | 'view'
   } | null>(null)
+
+  // AI Report Modal state
+  const [reportTender, setReportTender] = useState<Tender | null>(null)
+  const [runningAiTenderId, setRunningAiTenderId] = useState<string | null>(null)
 
   // Tender Edit Modal state
   const [editModalTender, setEditModalTender] = useState<Tender | null>(null)
@@ -245,6 +342,45 @@ export default function EligibilityCheckPage() {
     notify(
       `Eligibility check updated for "${updatedTender.title}". All documents and remarks saved.`
     )
+  }
+
+  const handleRunAiFromHistory = async (tenderToVerify: Tender) => {
+    setRunningAiTenderId(tenderToVerify.id)
+    try {
+      const res = await fetch('/api/ai-verify-eligibility', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tender: tenderToVerify,
+          pdfDataUrl: tenderToVerify.tenderDoc?.dataUrl,
+          submittedData: {
+            turnoverDoc: tenderToVerify.eligibilityCheck?.turnoverDoc,
+            experienceDoc: tenderToVerify.eligibilityCheck?.experienceDoc,
+            vendorRegDoc: tenderToVerify.eligibilityCheck?.vendorRegDoc,
+            otherDoc: tenderToVerify.eligibilityCheck?.otherDoc,
+            remarks: tenderToVerify.eligibilityCheck?.remarks || '',
+          },
+        }),
+      })
+      const data = await res.json()
+      if (data.success && data.verification) {
+        const updatedTender: Tender = {
+          ...tenderToVerify,
+          eligibilityCheck: {
+            ...tenderToVerify.eligibilityCheck,
+            aiVerification: data.verification,
+          },
+        }
+        updateTender(updatedTender.id, updatedTender)
+        notify(`AI Verification completed: "${data.verification.status}" for tender ${tenderToVerify.id}`)
+      } else {
+        throw new Error(data?.error || 'Verification failed')
+      }
+    } catch (e: any) {
+      notify(`Verification failed: ${e?.message || 'Error'}`)
+    } finally {
+      setRunningAiTenderId(null)
+    }
   }
 
   return (
@@ -329,7 +465,7 @@ export default function EligibilityCheckPage() {
               ) : null}
             </div>
           ) : (
-            <table style={{ minWidth: tab === 'completed' ? '1420px' : '960px' }}>
+            <table style={{ minWidth: tab === 'completed' ? '1620px' : '960px' }}>
               <thead>
                 <tr>
                   <th className="action-col">Action</th>
@@ -339,7 +475,8 @@ export default function EligibilityCheckPage() {
                       <th style={{ minWidth: 200 }}>1. Turnover Document</th>
                       <th style={{ minWidth: 200 }}>2. Experience Document</th>
                       <th style={{ minWidth: 190 }}>3. Other Documents</th>
-                      <th style={{ minWidth: 220 }}>4. Remarks & Notes</th>
+                      <th style={{ minWidth: 210 }}>4. Remarks & Notes</th>
+                      <th style={{ minWidth: 190 }}>5. AI Eligibility Result</th>
                       <th style={{ minWidth: 140 }}>Verified On</th>
                       <th style={{ minWidth: 140 }}>Stage & Status</th>
                     </>
@@ -405,11 +542,19 @@ export default function EligibilityCheckPage() {
                     {/* Tender Details */}
                     <td>
                       <div className="tender-name min-w-[170px] max-w-[240px]">
-                        <strong className="block text-slate-900 truncate" title={t.title}>
+                        <div className="mb-1 flex items-center gap-1.5 flex-wrap">
+                          <TenderNumberBadge id={t.id} />
+                          {t.value && (
+                            <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200/80">
+                              {t.value}
+                            </span>
+                          )}
+                        </div>
+                        <strong className="block text-slate-900 truncate text-xs" title={t.title}>
                           {t.title}
                         </strong>
-                        <small className="text-slate-500">
-                          {t.id} · {t.authority} {t.value ? `· ${t.value}` : ''}
+                        <small className="text-slate-500 text-[11px] block mt-0.5">
+                          {t.authority}
                         </small>
                       </div>
                     </td>
@@ -441,6 +586,16 @@ export default function EligibilityCheckPage() {
 
                         <td>
                           <ExpandableRemarkCell text={t.eligibilityCheck?.remarks} />
+                        </td>
+
+                        {/* 5. AI Eligibility Result */}
+                        <td>
+                          {renderAiEligibilityCell(
+                            t.eligibilityCheck?.aiVerification,
+                            () => setReportTender(t),
+                            () => handleRunAiFromHistory(t),
+                            runningAiTenderId === t.id
+                          )}
                         </td>
 
                         <td>
@@ -530,6 +685,331 @@ export default function EligibilityCheckPage() {
           document={previewDoc}
           onClose={() => setPreviewDoc(null)}
         />
+      )}
+
+      {/* AI Eligibility Audit Report Modal */}
+      {reportTender && reportTender.eligibilityCheck?.aiVerification && (
+        <div className="modal-backdrop">
+          <div className="modal modal-wide" style={{ maxWidth: '640px' }}>
+            <div className="modal-head border-b border-slate-100 pb-3">
+              <div>
+                <p className="eyebrow flex items-center gap-1.5 text-indigo-600 font-bold">
+                  <Sparkles className="w-3.5 h-3.5" /> AI ELIGIBILITY AUDIT REPORT
+                </p>
+                <h2 className="text-base font-bold text-slate-900 mt-0.5">
+                  {reportTender.title}
+                </h2>
+                <div className="flex items-center gap-2 mt-1">
+                  <TenderNumberBadge id={reportTender.id} />
+                  <span className="text-xs text-slate-500">· {reportTender.authority}</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setReportTender(null)}
+                title="Close"
+                className="text-slate-400 hover:text-slate-700"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4 max-h-[calc(85vh-120px)] overflow-y-auto text-xs">
+              {/* Status Banner */}
+              {(() => {
+                const ai = reportTender.eligibilityCheck!.aiVerification!
+                const isEligible = ai.status === 'Eligible'
+                const isPartially = ai.status === 'Partially Eligible'
+                return (
+                  <div
+                    className={`p-4 rounded-xl border flex items-start gap-3 shadow-xs ${
+                      isEligible
+                        ? 'bg-emerald-50 border-emerald-300 text-emerald-950'
+                        : isPartially
+                        ? 'bg-amber-50 border-amber-300 text-amber-950'
+                        : 'bg-rose-50 border-rose-300 text-rose-950'
+                    }`}
+                  >
+                    <div
+                      className={`p-2 rounded-full text-white mt-0.5 ${
+                        isEligible ? 'bg-emerald-600' : isPartially ? 'bg-amber-600' : 'bg-rose-600'
+                      }`}
+                    >
+                      {isEligible ? (
+                        <CheckCircle2 className="w-5 h-5" />
+                      ) : isPartially ? (
+                        <Clock3 className="w-5 h-5" />
+                      ) : (
+                        <AlertTriangle className="w-5 h-5" />
+                      )}
+                    </div>
+                    <div className="flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <h3 className="text-sm font-bold uppercase tracking-wide">
+                          AI Verification Verdict: {ai.status}
+                        </h3>
+                        <span className="px-2 py-0.5 rounded-full bg-white/90 font-bold border border-slate-200 text-xs shadow-2xs">
+                          Compliance Score: {ai.score}%
+                        </span>
+                      </div>
+                      <p className="mt-1 leading-relaxed opacity-95 text-xs font-medium">
+                        {ai.summary}
+                      </p>
+                      <div className="mt-2 text-[10px] opacity-70">
+                        Verified On: {new Date(ai.verifiedAt).toLocaleString('en-IN', {
+                          day: '2-digit',
+                          month: 'short',
+                          year: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                )
+              })()}
+
+              {/* 1. Overall Reasoning Narrative */}
+              {reportTender.eligibilityCheck?.aiVerification?.overallReasoning && (
+                <div className="p-3.5 rounded-lg bg-slate-50 border border-slate-200 text-xs space-y-1 shadow-2xs">
+                  <h4 className="font-bold text-slate-800 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
+                    <ShieldCheck className="w-3.5 h-3.5 text-blue-600" />
+                    Overall Eligibility Reasoning:
+                  </h4>
+                  <p className="text-slate-700 leading-relaxed text-[11px]">
+                    {reportTender.eligibilityCheck.aiVerification.overallReasoning}
+                  </p>
+                </div>
+              )}
+
+              {/* 2. Matched Criteria (Why Eligible) */}
+              {reportTender.eligibilityCheck?.aiVerification?.matchedCriteria &&
+                reportTender.eligibilityCheck.aiVerification.matchedCriteria.length > 0 && (
+                  <div className="p-3.5 rounded-lg bg-emerald-50/70 border border-emerald-200 text-xs space-y-1.5 shadow-2xs">
+                    <h4 className="font-bold text-emerald-900 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                      Matched Criteria (Why Eligible):
+                    </h4>
+                    <ul className="space-y-1 pl-4 list-disc text-emerald-800 text-[11px]">
+                      {reportTender.eligibilityCheck.aiVerification.matchedCriteria.map((m, idx) => (
+                        <li key={idx} className="leading-snug">
+                          {m}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+              {/* 3. Failed Criteria & Rejection Reasons (Why Not Eligible) */}
+              {reportTender.eligibilityCheck?.aiVerification?.failedCriteria &&
+                reportTender.eligibilityCheck.aiVerification.failedCriteria.length > 0 && (
+                  <div className="p-3.5 rounded-lg bg-rose-50/80 border border-rose-200 text-xs space-y-1.5 shadow-2xs">
+                    <h4 className="font-bold text-rose-900 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
+                      <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
+                      Failed Criteria & Rejection Reasons (Why Not Eligible):
+                    </h4>
+                    <ul className="space-y-1 pl-4 list-disc text-rose-800 text-[11px]">
+                      {reportTender.eligibilityCheck.aiVerification.failedCriteria.map((f, idx) => (
+                        <li key={idx} className="leading-snug font-medium">
+                          {f}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+              {/* 4. Missing Documents & Incomplete Requirements (Why Partially Eligible) */}
+              {reportTender.eligibilityCheck?.aiVerification?.missingRequirements &&
+                reportTender.eligibilityCheck.aiVerification.missingRequirements.length > 0 && (
+                  <div className="p-3.5 rounded-lg bg-amber-50/80 border border-amber-200 text-xs space-y-1.5 shadow-2xs">
+                    <h4 className="font-bold text-amber-900 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
+                      <Clock3 className="w-3.5 h-3.5 text-amber-600" />
+                      Missing Documents & Incomplete Requirements:
+                    </h4>
+                    <ul className="space-y-1 pl-4 list-disc text-amber-800 text-[11px]">
+                      {reportTender.eligibilityCheck.aiVerification.missingRequirements.map((mis, idx) => (
+                        <li key={idx} className="leading-snug">
+                          {mis}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+              {/* 5. Side-by-Side Comparison: Tender Requirement vs User Submitted Details */}
+              <div className="space-y-2">
+                <h4 className="font-bold text-slate-800 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
+                  <FileCheck className="w-3.5 h-3.5 text-indigo-600" />
+                  Tender Requirement vs User Submitted Details Comparison
+                </h4>
+
+                {reportTender.eligibilityCheck?.aiVerification?.criteriaBreakdown &&
+                reportTender.eligibilityCheck.aiVerification.criteriaBreakdown.length > 0 ? (
+                  <div className="border border-slate-200 rounded-lg overflow-hidden bg-white text-xs shadow-2xs">
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-[11px]">
+                        <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 font-semibold">
+                          <tr>
+                            <th className="p-2.5 min-w-[130px]">Criteria</th>
+                            <th className="p-2.5 min-w-[160px]">Tender Requirement</th>
+                            <th className="p-2.5 min-w-[160px]">User Submitted Details</th>
+                            <th className="p-2.5 min-w-[80px]">Status</th>
+                            <th className="p-2.5 min-w-[180px]">Comparison / Rejection Reason</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {reportTender.eligibilityCheck.aiVerification.criteriaBreakdown.map((row, rIdx) => (
+                            <tr key={rIdx} className="hover:bg-slate-50/60">
+                              <td className="p-2.5 font-bold text-slate-800">
+                                {row.criteriaName}
+                                {row.isMandatory && (
+                                  <span className="ml-1 text-[9px] px-1 py-0.2 rounded bg-slate-100 text-slate-600 font-normal">
+                                    Mandatory
+                                  </span>
+                                )}
+                              </td>
+                              <td className="p-2.5 text-slate-600 leading-tight">
+                                {row.tenderRequirement}
+                              </td>
+                              <td className="p-2.5 text-slate-800 font-medium leading-tight">
+                                {row.userSubmitted}
+                              </td>
+                              <td className="p-2.5">
+                                <span
+                                  className={`px-1.5 py-0.5 rounded font-bold text-[10px] ${
+                                    row.status === 'Pass'
+                                      ? 'bg-emerald-100 text-emerald-800'
+                                      : row.status === 'Fail'
+                                      ? 'bg-rose-100 text-rose-800'
+                                      : 'bg-amber-100 text-amber-800'
+                                  }`}
+                                >
+                                  {row.status}
+                                </span>
+                              </td>
+                              <td className="p-2.5 text-slate-700 leading-tight">
+                                {row.rejectionReason ? (
+                                  <span className="text-rose-700 font-medium">
+                                    {row.rejectionReason}
+                                  </span>
+                                ) : (
+                                  <span>{row.comparisonResult}</span>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ) : (
+                  /* Fallback to 3 check cards if breakdown array is not present */
+                  (() => {
+                    const ai = reportTender.eligibilityCheck!.aiVerification!
+                    return (
+                      <div className="space-y-2">
+                        {/* 1. Turnover */}
+                        <div className="p-3 rounded-lg border border-slate-200 bg-white space-y-1">
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-slate-900">1. Annual Financial Turnover</span>
+                            <span
+                              className={`px-2 py-0.5 rounded font-bold text-[10px] ${
+                                ai.turnoverCheck.status === 'Pass'
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : 'bg-rose-100 text-rose-800'
+                              }`}
+                            >
+                              {ai.turnoverCheck.status}
+                            </span>
+                          </div>
+                          <p className="text-slate-500 text-[11px]">
+                            <strong>Required by Tender:</strong> {ai.turnoverCheck.required}
+                          </p>
+                          <p className="text-slate-500 text-[11px]">
+                            <strong>Submitted by Bidder:</strong> {ai.turnoverCheck.submitted}
+                          </p>
+                          <p className="text-slate-700 bg-slate-50 p-2 rounded border border-slate-100 mt-1">
+                            {ai.turnoverCheck.notes}
+                          </p>
+                        </div>
+
+                        {/* 2. Experience */}
+                        <div className="p-3 rounded-lg border border-slate-200 bg-white space-y-1">
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-slate-900">2. Past Technical Experience</span>
+                            <span
+                              className={`px-2 py-0.5 rounded font-bold text-[10px] ${
+                                ai.experienceCheck.status === 'Pass'
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : 'bg-rose-100 text-rose-800'
+                              }`}
+                            >
+                              {ai.experienceCheck.status}
+                            </span>
+                          </div>
+                          <p className="text-slate-500 text-[11px]">
+                            <strong>Required by Tender:</strong> {ai.experienceCheck.required}
+                          </p>
+                          <p className="text-slate-500 text-[11px]">
+                            <strong>Submitted by Bidder:</strong> {ai.experienceCheck.submitted}
+                          </p>
+                          <p className="text-slate-700 bg-slate-50 p-2 rounded border border-slate-100 mt-1">
+                            {ai.experienceCheck.notes}
+                          </p>
+                        </div>
+
+                        {/* 3. Statutory */}
+                        <div className="p-3 rounded-lg border border-slate-200 bg-white space-y-1">
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-slate-900">3. Statutory & Registration Documents</span>
+                            <span
+                              className={`px-2 py-0.5 rounded font-bold text-[10px] ${
+                                ai.documentsCheck.status === 'Pass'
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : 'bg-amber-100 text-amber-800'
+                              }`}
+                            >
+                              {ai.documentsCheck.status}
+                            </span>
+                          </div>
+                          <p className="text-slate-700 bg-slate-50 p-2 rounded border border-slate-100 mt-1">
+                            {ai.documentsCheck.notes}
+                          </p>
+                        </div>
+                      </div>
+                    )
+                  })()
+                )}
+              </div>
+
+              {/* 6. Concluding Takeaway */}
+              {reportTender.eligibilityCheck?.aiVerification?.conclusion && (
+                <div className="p-3.5 rounded-lg bg-indigo-50/80 border border-indigo-200 text-indigo-950 text-xs font-medium">
+                  <strong>Final Conclusion:</strong> {reportTender.eligibilityCheck.aiVerification.conclusion}
+                </div>
+              )}
+
+              {/* 7. Insufficient Information Notice */}
+              {reportTender.eligibilityCheck?.aiVerification?.insufficientInfoNotes && (
+                <div className="p-2.5 rounded-lg bg-slate-100 border border-slate-200 text-slate-600 text-[11px] italic flex items-center gap-1.5">
+                  <Info className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
+                  <span>{reportTender.eligibilityCheck.aiVerification.insufficientInfoNotes}</span>
+                </div>
+              )}
+
+              {/* Modal Close Button */}
+              <div className="flex justify-end pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setReportTender(null)}
+                  className="secondary-button text-xs py-2 px-4"
+                >
+                  Close Report
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </section>
   )

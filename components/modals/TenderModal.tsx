@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useState } from 'react'
+import { FileCheck, Info } from 'lucide-react';
 import {
   AlertCircle,
   AlertTriangle,
@@ -9,6 +10,9 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronUp,
+  Edit3,
+  ExternalLink,
+  Eye,
   FileText,
   FileUp,
   Flame,
@@ -36,6 +40,15 @@ import { emptyBid, missingDocFields } from '@/lib/tender-docs'
 import { TenderExtraction } from '@/lib/tender-extraction-schema'
 import { CorrigendumExtraction } from '@/lib/corrigendum-extraction-schema'
 import { calculateTenderFeePlusGst } from '@/lib/fee-calculation'
+import { uploadToSupabaseBucket, STAGE_FOLDERS } from '@/lib/supabase-storage'
+
+function formatBytes(bytes?: number): string {
+  if (!bytes || bytes <= 0) return ''
+  const k = 1024
+  const sizes = ['Bytes', 'KB', 'MB', 'GB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`
+}
 
 const isDate = (v: string | null): v is string => !!v && /^\d{4}-\d{2}-\d{2}$/.test(v)
 
@@ -221,17 +234,115 @@ export function TenderModal({
   const [selectedChanges, setSelectedChanges] = useState<Record<string, boolean>>({})
   const [appliedFeedback, setAppliedFeedback] = useState<string | null>(null)
 
+  // Corrigendum Edit State
+  const [editingCorrId, setEditingCorrId] = useState<string | null>(null)
+  const [editCorrForm, setEditCorrForm] = useState<{
+    corrigendumNo: string
+    issueDate: string
+    tenderRef: string
+    overview: string
+  }>({
+    corrigendumNo: '',
+    issueDate: '',
+    tenderRef: '',
+    overview: '',
+  })
+
   const corrigenda: CorrigendumRecord[] = form.corrigenda || []
   const activeCorrigendum =
     corrigenda.find(c => c.id === activeCorrigendumId) ||
     (corrigenda.length > 0 ? corrigenda[corrigenda.length - 1] : null)
 
-  const handleCorrigendumUpload = async (file: File | undefined) => {
+  const readFileAsDataUrl = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '')
+      reader.onerror = () => reject(new Error('Failed to read file'))
+      reader.readAsDataURL(file)
+    })
+  }
+
+  const startEditCorrigendum = (c: CorrigendumRecord) => {
+    setEditingCorrId(c.id)
+    setEditCorrForm({
+      corrigendumNo: c.corrigendumNo,
+      issueDate: c.issueDate || '',
+      tenderRef: c.tenderRef || '',
+      overview: c.overview || '',
+    })
+  }
+
+  const saveEditedCorrigendum = () => {
+    if (!editingCorrId || !editCorrForm) return
+    setForm(prev => ({
+      ...prev,
+      corrigenda: (prev.corrigenda || []).map(c =>
+        c.id === editingCorrId
+          ? {
+              ...c,
+              corrigendumNo: editCorrForm.corrigendumNo.trim() || c.corrigendumNo,
+              issueDate: editCorrForm.issueDate || c.issueDate,
+              tenderRef: editCorrForm.tenderRef || c.tenderRef,
+              overview: editCorrForm.overview || c.overview,
+            }
+          : c
+      ),
+    }))
+    setEditingCorrId(null)
+    setCorrigendumMessage({ tone: 'ok', text: 'Corrigendum details updated successfully.' })
+  }
+
+  const handleCorrigendumDelete = (corrId: string) => {
+    const target = corrigenda.find(c => c.id === corrId)
+    const name = target?.corrigendumNo || 'this corrigendum'
+    if (window.confirm(`Are you sure you want to delete ${name}?`)) {
+      removeCorrigendum(corrId)
+      setCorrigendumMessage({ tone: 'ok', text: `${name} deleted successfully. Click Save to persist changes.` })
+    }
+  }
+
+  const handleCorrigendumView = (corr: CorrigendumRecord) => {
+    const url = corr.fileUrl || corr.dataUrl
+    if (!url) {
+      alert('No PDF file attached to this corrigendum.')
+      return
+    }
+    const win = window.open()
+    if (win) {
+      if (url.startsWith('data:')) {
+        win.document.write(
+          `<iframe src="${url}" frameborder="0" style="border:0; top:0px; left:0px; bottom:0px; right:0px; width:100%; height:100%;" allowfullscreen></iframe>`
+        )
+      } else {
+        win.location.href = url
+      }
+    }
+  }
+
+  const handleCorrigendumUpload = async (file: File | undefined, replaceCorrId?: string) => {
     if (!file) return
     setCorrigendumExtracting(true)
     setCorrigendumMessage(null)
     setAppliedFeedback(null)
     try {
+      const dataUrl = await readFileAsDataUrl(file)
+      let finalUrl = dataUrl
+
+      try {
+        const uploadRes = await uploadToSupabaseBucket({
+          file,
+          dataUrl,
+          fileName: file.name,
+          folder: 'stage-01-corrigendum',
+          tenderId: form.id || 'draft',
+        })
+        if (uploadRes.storage === 'bucket' && uploadRes.url) {
+          finalUrl = uploadRes.url
+        }
+      } catch (uploadErr) {
+        console.warn('Corrigendum bucket upload fallback:', uploadErr)
+      }
+
       const body = new FormData()
       body.append('file', file)
       body.append(
@@ -256,7 +367,7 @@ export function TenderModal({
       if (!res.ok || !json.data) throw new Error(json.error || 'Could not analyze the Corrigendum PDF.')
       const data = json.data as CorrigendumExtraction
 
-      const newRecordId = `corr-${Date.now()}`
+      const newRecordId = replaceCorrId || `corr-${Date.now()}`
       const changesWithIds: CorrigendumChangeItem[] = (data.changes || []).map((ch, idx) => ({
         id: `ch-${Date.now()}-${idx}`,
         type: ch.type,
@@ -270,14 +381,18 @@ export function TenderModal({
         applied: false,
       }))
 
-      const newRecord: CorrigendumRecord = {
+      const existingRecord = replaceCorrId ? corrigenda.find(c => c.id === replaceCorrId) : null
+      const updatedRecord: CorrigendumRecord = {
         id: newRecordId,
-        corrigendumNo: data.corrigendumNo || `Corrigendum-${corrigenda.length + 1}`,
-        issueDate: data.issueDate,
-        tenderRef: data.tenderRef,
+        corrigendumNo: data.corrigendumNo || existingRecord?.corrigendumNo || `Corrigendum-${corrigenda.length + 1}`,
+        issueDate: data.issueDate || existingRecord?.issueDate,
+        tenderRef: data.tenderRef || existingRecord?.tenderRef,
         fileName: file.name,
+        fileUrl: finalUrl,
+        dataUrl: finalUrl,
+        fileSize: file.size,
         uploadedAt: new Date().toISOString(),
-        overview: data.overview || 'Official corrigendum updates processed by AI.',
+        overview: data.overview || existingRecord?.overview || 'Official corrigendum updates processed by AI.',
         changes: changesWithIds,
       }
 
@@ -292,7 +407,26 @@ export function TenderModal({
 
       setForm(prev => {
         const existing = prev.corrigenda || []
-        return { ...prev, corrigenda: [...existing, newRecord] }
+        const updatedCorrigenda = replaceCorrId
+          ? existing.map(c => (c.id === replaceCorrId ? updatedRecord : c))
+          : [...existing, updatedRecord]
+
+        const corrLabel = updatedRecord.issueDate
+          ? `${updatedRecord.corrigendumNo} dated ${updatedRecord.issueDate}`
+          : updatedRecord.corrigendumNo
+
+        const updatedBid = { ...(prev.bid ?? emptyBid()) }
+        if (!updatedBid.corrigendum || !updatedBid.corrigendum.trim()) {
+          updatedBid.corrigendum = corrLabel
+        } else if (!updatedBid.corrigendum.includes(updatedRecord.corrigendumNo)) {
+          updatedBid.corrigendum = `${updatedBid.corrigendum}, ${corrLabel}`
+        }
+
+        return {
+          ...prev,
+          corrigenda: updatedCorrigenda,
+          bid: updatedBid,
+        }
       })
 
       setActiveCorrigendumId(newRecordId)
@@ -306,7 +440,7 @@ export function TenderModal({
         tone: isMismatch ? 'warn' : 'ok',
         text: isMismatch
           ? `Analyzed “${file.name}”. ⚠️ Note: Corrigendum quotes tender ref "${data.tenderRef}", differing from RfS No "${form.bid?.rfsNo}". Please review carefully.`
-          : `Analyzed “${file.name}”: Identified ${changesWithIds.length} update(s) for ${newRecord.corrigendumNo}. Review and apply changes below.`,
+          : `Analyzed “${file.name}”: Identified ${changesWithIds.length} update(s) for ${updatedRecord.corrigendumNo}. Review and apply changes below.`,
       })
     } catch (err) {
       setCorrigendumMessage({
@@ -417,13 +551,46 @@ export function TenderModal({
   }
 
   const removeCorrigendum = (corrId: string) => {
-    setForm(prev => ({
-      ...prev,
-      corrigenda: (prev.corrigenda || []).filter(c => c.id !== corrId),
-    }))
+    setForm(prev => {
+      const remaining = (prev.corrigenda || []).filter(c => c.id !== corrId)
+      const updatedBid = { ...(prev.bid ?? emptyBid()) }
+      updatedBid.corrigendum = remaining
+        .map(c => `${c.corrigendumNo || 'Corrigendum'}${c.issueDate ? ` dated ${c.issueDate}` : ''}`)
+        .join(', ')
+      return {
+        ...prev,
+        corrigenda: remaining,
+        bid: updatedBid,
+      }
+    })
     if (activeCorrigendumId === corrId) {
       setActiveCorrigendumId(null)
       setShowCorrigendumReview(false)
+    }
+  }
+
+  const handlePdfDelete = () => {
+    if (window.confirm('Are you sure you want to delete the uploaded Tender PDF?')) {
+      setForm(prev => ({ ...prev, tenderDoc: null }))
+      setExtractMessage({ tone: 'ok', text: 'Tender PDF removed successfully. Click Save to persist changes.' })
+    }
+  }
+
+  const handlePdfView = () => {
+    if (!form.tenderDoc?.dataUrl) {
+      alert('No PDF file attached.')
+      return
+    }
+    const url = form.tenderDoc.dataUrl
+    const win = window.open()
+    if (win) {
+      if (url.startsWith('data:')) {
+        win.document.write(
+          `<iframe src="${url}" frameborder="0" style="border:0; top:0px; left:0px; bottom:0px; right:0px; width:100%; height:100%;" allowfullscreen></iframe>`
+        )
+      } else {
+        win.location.href = url
+      }
     }
   }
 
@@ -432,6 +599,38 @@ export function TenderModal({
     setExtracting(true)
     setExtractMessage(null)
     try {
+      // 1. Read file as base64 dataUrl immediately
+      const dataUrl = await readFileAsDataUrl(file)
+      let finalUrl = dataUrl
+
+      // 2. Upload to Supabase bucket if configured
+      try {
+        const uploadRes = await uploadToSupabaseBucket({
+          file,
+          dataUrl,
+          fileName: file.name,
+          folder: STAGE_FOLDERS.STAGE_01_NOTICE,
+          tenderId: form.id || 'draft',
+        })
+        if (uploadRes.storage === 'bucket' && uploadRes.url) {
+          finalUrl = uploadRes.url
+        }
+      } catch (err) {
+        console.warn('Storage bucket upload fallback:', err)
+      }
+
+      const tenderDocItem = {
+        id: `nit-${Date.now()}`,
+        name: file.name,
+        size: file.size,
+        type: file.type || 'application/pdf',
+        uploadedAt: new Date().toISOString(),
+        dataUrl: finalUrl,
+        source: 'new-tender' as const,
+        referenceNote: 'Official NIT / Tender Document uploaded at New Tender creation',
+      }
+
+      // 3. Extract tender details with AI
       const body = new FormData()
       body.append('file', file)
       const res = await fetch('/api/extract-tender', { method: 'POST', body })
@@ -439,30 +638,14 @@ export function TenderModal({
       if (!res.ok || !json.data) throw new Error(json.error || 'Could not read the PDF.')
       const extracted = json.data as TenderExtraction
       const { filled } = applyExtraction(form, extracted, masters)
+
       setForm(prev => {
         const updated = applyExtraction(prev, extracted, masters).tender
-        return updated
+        return {
+          ...updated,
+          tenderDoc: tenderDocItem,
+        }
       })
-
-      // Associate uploaded NIT / Tender Document with this tender so downstream modules can use it
-      const reader = new FileReader()
-      reader.onload = () => {
-        const dataUrl = typeof reader.result === 'string' ? reader.result : undefined
-        setForm(prev => ({
-          ...prev,
-          tenderDoc: {
-            id: `nit-${Date.now()}`,
-            name: file.name,
-            size: file.size,
-            type: file.type || 'application/pdf',
-            uploadedAt: new Date().toISOString(),
-            dataUrl,
-            source: 'new-tender',
-            referenceNote: 'Official NIT / Tender Document uploaded at New Tender creation',
-          },
-        }))
-      }
-      reader.readAsDataURL(file)
 
       setExtractMessage({
         tone: 'ok',
@@ -479,16 +662,28 @@ export function TenderModal({
   const [showConfirmCreate, setShowConfirmCreate] = useState(false)
 
   const performSave = () => {
+    const finalBid = { ...(form.bid ?? emptyBid()) }
+    if ((!finalBid.corrigendum || !finalBid.corrigendum.trim()) && form.corrigenda && form.corrigenda.length > 0) {
+      finalBid.corrigendum = form.corrigenda
+        .map(c => `${c.corrigendumNo || 'Corrigendum'}${c.issueDate ? ` dated ${c.issueDate}` : ''}`)
+        .join(', ')
+    }
+
+    const tenderToSave: Tender = {
+      ...form,
+      bid: finalBid,
+    }
+
     if (mode === 'process') {
       const isFinal = targetStage === 'Financial Open Check'
       const updatedStatus: Status = isFinal ? 'Completed' : form.status === 'Completed' ? 'Completed' : 'Ready'
       onSave({
-        ...form,
+        ...tenderToSave,
         stage: targetStage,
         status: updatedStatus,
       })
     } else {
-      onSave(form)
+      onSave(tenderToSave)
     }
   }
 
@@ -680,24 +875,87 @@ export function TenderModal({
                       Upload the tender / NIT / RfS PDF and the fields below (and every generated document) will be filled
                       automatically. Review the values before saving.
                     </p>
-                    <div className="flex items-center gap-3">
-                      <label className="secondary-button cursor-pointer text-xs">
-                        <FileUp className="w-4 h-4" />
-                        {extracting ? 'Reading PDF…' : 'Upload Tender PDF'}
-                        <input
-                          type="file"
-                          accept="application/pdf"
-                          className="hidden"
-                          disabled={extracting}
-                          onChange={e => {
-                            const file = e.target.files?.[0]
-                            e.target.value = ''
-                            handlePdfUpload(file)
-                          }}
-                        />
-                      </label>
-                      {extracting && <Loader2 className="w-4 h-4 animate-spin text-blue-600" />}
-                    </div>
+
+                    {form.tenderDoc ? (
+                      <div className="bg-blue-50/90 border border-blue-200 rounded-lg p-3 space-y-2 mt-1">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex items-start gap-2.5 min-w-0">
+                            <div className="w-8 h-8 rounded bg-red-100 text-red-600 grid place-items-center flex-shrink-0 mt-0.5">
+                              <FileText className="w-4 h-4" />
+                            </div>
+                            <div className="min-w-0">
+                              <span className="text-xs font-bold text-slate-800 block truncate" title={form.tenderDoc.name}>
+                                {form.tenderDoc.name}
+                              </span>
+                              <span className="text-[11px] text-slate-500 block">
+                                {formatBytes(form.tenderDoc.size)} {form.tenderDoc.uploadedAt ? `• Uploaded ${new Date(form.tenderDoc.uploadedAt).toLocaleDateString()}` : ''}
+                              </span>
+                            </div>
+                          </div>
+                          <span className="badge badge-emerald text-[10px] px-2 py-0.5 whitespace-nowrap">
+                            Attached
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-2 pt-1 border-t border-blue-100 flex-wrap">
+                          {form.tenderDoc.dataUrl && (
+                            <button
+                              type="button"
+                              onClick={handlePdfView}
+                              className="text-xs text-blue-700 hover:text-blue-900 font-semibold flex items-center gap-1 px-2 py-1 rounded hover:bg-blue-100/60"
+                              title="View uploaded PDF"
+                            >
+                              <Eye className="w-3.5 h-3.5" /> View PDF
+                            </button>
+                          )}
+
+                          <label className="text-xs text-indigo-700 hover:text-indigo-900 font-semibold flex items-center gap-1 px-2 py-1 rounded hover:bg-indigo-100/60 cursor-pointer">
+                            <FileUp className="w-3.5 h-3.5" />
+                            {extracting ? 'Replacing…' : 'Edit / Replace PDF'}
+                            <input
+                              type="file"
+                              accept="application/pdf"
+                              className="hidden"
+                              disabled={extracting}
+                              onChange={e => {
+                                const file = e.target.files?.[0]
+                                e.target.value = ''
+                                handlePdfUpload(file)
+                              }}
+                            />
+                          </label>
+
+                          <button
+                            type="button"
+                            onClick={handlePdfDelete}
+                            className="text-xs text-red-600 hover:text-red-800 font-semibold flex items-center gap-1 px-2 py-1 rounded hover:bg-red-50 ml-auto"
+                            title="Delete Tender PDF"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" /> Delete PDF
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-3">
+                        <label className="secondary-button cursor-pointer text-xs">
+                          <FileUp className="w-4 h-4" />
+                          {extracting ? 'Reading & Uploading PDF…' : 'Upload Tender PDF'}
+                          <input
+                            type="file"
+                            accept="application/pdf"
+                            className="hidden"
+                            disabled={extracting}
+                            onChange={e => {
+                              const file = e.target.files?.[0]
+                              e.target.value = ''
+                              handlePdfUpload(file)
+                            }}
+                          />
+                        </label>
+                        {extracting && <Loader2 className="w-4 h-4 animate-spin text-blue-600" />}
+                      </div>
+                    )}
+
                     {extractMessage && (
                       <p className={extractMessage.tone === 'ok' ? 'text-xs text-emerald-700 font-medium' : 'text-xs text-red-600'}>
                         {extractMessage.text}
@@ -758,24 +1016,43 @@ export function TenderModal({
                           {corrigenda.map((c, idx) => {
                             const isActive = activeCorrigendum?.id === c.id
                             return (
-                              <button
+                              <div
                                 key={c.id || idx}
-                                type="button"
-                                onClick={() => {
-                                  setActiveCorrigendumId(c.id)
-                                  setShowCorrigendumReview(true)
-                                }}
-                                className={`text-[11px] px-2.5 py-1 rounded-md border flex items-center gap-1.5 font-medium transition-all ${
+                                className={`inline-flex items-center rounded-md border text-[11px] overflow-hidden ${
                                   isActive
                                     ? 'border-purple-600 bg-purple-600 text-white shadow-sm'
                                     : 'border-purple-300 bg-white text-purple-900 hover:bg-purple-50'
                                 }`}
                               >
-                                <span>{c.corrigendumNo || `Corr-${idx + 1}`}</span>
-                                <span className={isActive ? 'text-purple-200 text-[10px]' : 'text-purple-600 font-bold text-[10px]'}>
-                                  ({c.changes.length})
-                                </span>
-                              </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setActiveCorrigendumId(c.id)
+                                    setShowCorrigendumReview(true)
+                                  }}
+                                  className="px-2 py-1 flex items-center gap-1 font-medium"
+                                >
+                                  <span>{c.corrigendumNo || `Corr-${idx + 1}`}</span>
+                                  <span className={isActive ? 'text-purple-200 text-[10px]' : 'text-purple-600 font-bold text-[10px]'}>
+                                    ({c.changes.length})
+                                  </span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={e => {
+                                    e.stopPropagation()
+                                    handleCorrigendumDelete(c.id)
+                                  }}
+                                  className={`px-1.5 py-1 transition-colors ${
+                                    isActive
+                                      ? 'text-purple-200 hover:bg-purple-700 hover:text-white'
+                                      : 'text-slate-400 hover:bg-red-50 hover:text-red-600'
+                                  }`}
+                                  title={`Delete ${c.corrigendumNo}`}
+                                >
+                                  <X className="w-3 h-3" />
+                                </button>
+                              </div>
                             )
                           })}
                         </div>
@@ -813,15 +1090,64 @@ export function TenderModal({
                         </p>
                       </div>
 
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {/* View PDF */}
+                        {(activeCorrigendum.fileUrl || activeCorrigendum.dataUrl) && (
+                          <button
+                            type="button"
+                            onClick={() => handleCorrigendumView(activeCorrigendum)}
+                            className="text-xs text-purple-700 hover:text-purple-900 font-semibold flex items-center gap-1 px-2 py-1 rounded hover:bg-purple-50 border border-purple-200"
+                            title="View Corrigendum PDF"
+                          >
+                            <Eye className="w-3.5 h-3.5" /> View PDF
+                          </button>
+                        )}
+
+                        {/* Replace / Edit PDF */}
+                        <label
+                          className="text-xs text-indigo-700 hover:text-indigo-900 font-semibold flex items-center gap-1 px-2 py-1 rounded hover:bg-indigo-50 border border-indigo-200 cursor-pointer"
+                          title="Replace PDF file for this Corrigendum"
+                        >
+                          <FileUp className="w-3.5 h-3.5" />
+                          {corrigendumExtracting ? 'Uploading…' : 'Replace PDF'}
+                          <input
+                            type="file"
+                            accept="application/pdf"
+                            className="hidden"
+                            disabled={corrigendumExtracting}
+                            onChange={e => {
+                              const file = e.target.files?.[0]
+                              e.target.value = ''
+                              handleCorrigendumUpload(file, activeCorrigendum.id)
+                            }}
+                          />
+                        </label>
+
+                        {/* Edit details */}
                         <button
                           type="button"
-                          onClick={() => removeCorrigendum(activeCorrigendum.id)}
-                          className="text-xs text-red-600 hover:text-red-700 flex items-center gap-1 px-2 py-1 rounded hover:bg-red-50"
-                          title="Remove this corrigendum record"
+                          onClick={() => {
+                            if (editingCorrId === activeCorrigendum.id) {
+                              setEditingCorrId(null)
+                            } else {
+                              startEditCorrigendum(activeCorrigendum)
+                            }
+                          }}
+                          className="text-xs text-slate-700 hover:text-slate-900 flex items-center gap-1 px-2 py-1 rounded hover:bg-slate-100 border border-slate-200"
+                          title="Edit Corrigendum Details"
                         >
-                          <Trash2 className="w-3.5 h-3.5" /> Remove
+                          <Edit3 className="w-3.5 h-3.5" /> {editingCorrId === activeCorrigendum.id ? 'Cancel Edit' : 'Edit Details'}
                         </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleCorrigendumDelete(activeCorrigendum.id)}
+                          className="text-xs text-red-600 hover:text-red-700 flex items-center gap-1 px-2 py-1 rounded hover:bg-red-50 border border-red-200"
+                          title="Delete this corrigendum record"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" /> Delete
+                        </button>
+
                         <button
                           type="button"
                           onClick={() => setShowCorrigendumReview(false)}
@@ -832,6 +1158,70 @@ export function TenderModal({
                         </button>
                       </div>
                     </div>
+
+                    {/* Inline Corrigendum Editor */}
+                    {editingCorrId === activeCorrigendum.id && (
+                      <div className="p-3 bg-purple-50/70 border border-purple-200 rounded-lg space-y-2.5 text-xs mb-3">
+                        <div className="font-bold text-purple-950 flex items-center gap-1.5">
+                          <Edit3 className="w-3.5 h-3.5 text-purple-600" /> Edit Corrigendum Details
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                          <label className="flex flex-col gap-1">
+                            <span className="text-[11px] font-semibold text-slate-700">Corrigendum No.</span>
+                            <input
+                              className="border border-slate-300 rounded px-2 py-1 bg-white text-xs"
+                              value={editCorrForm.corrigendumNo}
+                              onChange={e => setEditCorrForm(prev => ({ ...prev, corrigendumNo: e.target.value }))}
+                              placeholder="e.g. Corrigendum-1"
+                            />
+                          </label>
+                          <label className="flex flex-col gap-1">
+                            <span className="text-[11px] font-semibold text-slate-700">Issue Date</span>
+                            <input
+                              type="date"
+                              className="border border-slate-300 rounded px-2 py-1 bg-white text-xs"
+                              value={editCorrForm.issueDate}
+                              onChange={e => setEditCorrForm(prev => ({ ...prev, issueDate: e.target.value }))}
+                            />
+                          </label>
+                          <label className="flex flex-col gap-1">
+                            <span className="text-[11px] font-semibold text-slate-700">Quoted Tender Ref</span>
+                            <input
+                              className="border border-slate-300 rounded px-2 py-1 bg-white text-xs"
+                              value={editCorrForm.tenderRef}
+                              onChange={e => setEditCorrForm(prev => ({ ...prev, tenderRef: e.target.value }))}
+                              placeholder="e.g. CSPDCL/NIT/1095"
+                            />
+                          </label>
+                        </div>
+                        <label className="flex flex-col gap-1">
+                          <span className="text-[11px] font-semibold text-slate-700">Overview / Scope Summary</span>
+                          <textarea
+                            rows={2}
+                            className="border border-slate-300 rounded px-2 py-1 bg-white text-xs resize-none"
+                            value={editCorrForm.overview}
+                            onChange={e => setEditCorrForm(prev => ({ ...prev, overview: e.target.value }))}
+                            placeholder="Brief summary of changes..."
+                          />
+                        </label>
+                        <div className="flex items-center justify-end gap-2 pt-1">
+                          <button
+                            type="button"
+                            onClick={() => setEditingCorrId(null)}
+                            className="secondary-button text-xs py-1 px-2.5"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={saveEditedCorrigendum}
+                            className="primary-button text-xs py-1 px-3 bg-purple-700 hover:bg-purple-800"
+                          >
+                            Save Details
+                          </button>
+                        </div>
+                      </div>
+                    )}
 
                     {/* Reference Validation Banner */}
                     {activeCorrigendum.tenderRef && (
@@ -1311,59 +1701,248 @@ export function TenderModal({
       </div>
     )}
 
-    {/* Confirmation Popup Before Creating a Tender */}
-    {showConfirmCreate && (
-      <div className="modal-backdrop" style={{ zIndex: 70 }}>
-        <div className="modal" style={{ width: 'min(440px, 100%)' }}>
-          <div className="modal-head">
-            <div>
-              <p className="eyebrow">CONFIRMATION</p>
-              <h2 className='text-green-600'>Create Tender</h2>
-            </div>
-            <button onClick={() => setShowConfirmCreate(false)} aria-label="Close confirmation">
-              <X className="w-5 h-5" />
-            </button>
-          </div>
-          <div style={{ padding: '20px 24px' }}>
-            <p className="text-sm font-semibold text-red-800 mb-2">
-              Are you sure you want to create this tender?
-            </p>
-            {form.title && (
-              <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 mb-3 text-xs text-slate-600">
-                <span className="font-semibold text-slate-700 block truncate" title={form.title}>
-                  {form.title}
-                </span>
-                <span className="text-[11px] text-slate-500 block mt-0.5">
-                  Authority: {form.authority || '—'}
-                </span>
-              </div>
-            )}
-            <p className="text-xs text-slate-500">
-              Click &quot;Confirm&quot; to proceed and save this tender to the database, or &quot;Cancel&quot; to return to editing.
-            </p>
-          </div>
-          <div className="modal-actions">
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={() => setShowConfirmCreate(false)}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              className="primary-button"
-              onClick={() => {
-                setShowConfirmCreate(false)
-                performSave()
+  
+
+
+    
+{showConfirmCreate && (
+  <div
+    className="modal-backdrop"
+    style={{
+      zIndex: 70,
+      backdropFilter: 'blur(5px)',
+      background: 'rgba(15, 23, 42, 0.55)',
+    }}
+  >
+    <div
+      className="modal"
+      style={{
+        width: 'min(460px, 94%)',
+        borderRadius: '18px',
+        overflow: 'hidden',
+        boxShadow: '0 25px 70px rgba(0,0,0,0.22)',
+        border: '1px solid #e2e8f0',
+      }}
+    >
+      {/* Header */}
+      <div
+        className="modal-head"
+        style={{
+          padding: '22px 24px',
+          background: '#f8fafc',
+          borderBottom: '1px solid #e2e8f0',
+        }}
+      >
+        <div>
+          <p className="eyebrow" style={{ color: '#64748b' }}>
+            TENDER MANAGEMENT
+          </p>
+          <h2
+            className="text-green-700"
+            style={{ fontSize: '21px', fontWeight: 700 }}
+          >
+            Confirm Tender Creation
+          </h2>
+        </div>
+
+        <button
+          onClick={() => setShowConfirmCreate(false)}
+          aria-label="Close confirmation"
+          style={{
+            padding: '7px',
+            borderRadius: '8px',
+            background: '#e2e8f0',
+            color: '#475569',
+          }}
+        >
+          <X className="w-5 h-5" />
+        </button>
+      </div>
+
+      {/* Body */}
+      <div style={{ padding: '26px 24px' }}>
+
+        {/* Confirmation Icon */}
+        <div
+          style={{
+            width: '58px',
+            height: '58px',
+            borderRadius: '50%',
+            background: '#dcfce7',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            marginBottom: '18px',
+          }}
+        >
+          <FileCheck
+            className="w-7 h-7"
+            style={{ color: '#15803d' }}
+          />
+        </div>
+
+        <h3
+          style={{
+            fontSize: '17px',
+            fontWeight: 700,
+            color: '#0f172a',
+            marginBottom: '8px',
+          }}
+        >
+          Are you sure?
+        </h3>
+
+        <p
+          style={{
+            fontSize: '13px',
+            color: '#64748b',
+            lineHeight: '1.7',
+            marginBottom: '20px',
+          }}
+        >
+          You are about to create a new tender. Please review the
+          details below before proceeding.
+        </p>
+
+        {/* Tender Details */}
+        {form.title && (
+          <div
+            style={{
+              background: '#f8fafc',
+              border: '1px solid #e2e8f0',
+              borderRadius: '12px',
+              padding: '15px',
+              marginBottom: '18px',
+            }}
+          >
+            <p
+              style={{
+                fontSize: '11px',
+                fontWeight: 700,
+                color: '#64748b',
+                marginBottom: '6px',
+                letterSpacing: '0.5px',
               }}
             >
-              Confirm <ArrowRight className="w-4 h-4" />
-            </button>
+              TENDER DETAILS
+            </p>
+
+            <p
+              style={{
+                fontSize: '14px',
+                fontWeight: 700,
+                color: '#1e293b',
+                overflowWrap: 'anywhere',
+                marginBottom: '12px',
+              }}
+            >
+              {form.title}
+            </p>
+
+            <div
+              style={{
+                borderTop: '1px solid #e2e8f0',
+                paddingTop: '10px',
+              }}
+            >
+              <p style={{ fontSize: '11px', color: '#64748b' }}>
+                ISSUING AUTHORITY
+              </p>
+
+              <p
+                style={{
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  color: '#334155',
+                  marginTop: '3px',
+                }}
+              >
+                {form.authority || 'Not specified'}
+              </p>
+            </div>
           </div>
+        )}
+
+        {/* Notice */}
+        <div
+          style={{
+            display: 'flex',
+            gap: '9px',
+            alignItems: 'flex-start',
+            padding: '11px 12px',
+            background: '#eff6ff',
+            borderRadius: '9px',
+            border: '1px solid #dbeafe',
+          }}
+        >
+          <Info
+            className="w-4 h-4"
+            style={{
+              color: '#2563eb',
+              flexShrink: 0,
+              marginTop: '2px',
+            }}
+          />
+
+          <p
+            style={{
+              fontSize: '12px',
+              color: '#1e40af',
+              lineHeight: '1.6',
+            }}
+          >
+            Confirming will save this tender to the database.
+            Please ensure all entered information is correct.
+          </p>
         </div>
       </div>
-    )}
+
+      {/* Footer Actions */}
+      <div
+        className="modal-actions"
+        style={{
+          padding: '16px 24px',
+          background: '#f8fafc',
+          borderTop: '1px solid #e2e8f0',
+          gap: '10px',
+        }}
+      >
+        <button
+          type="button"
+          className="secondary-button"
+          onClick={() => setShowConfirmCreate(false)}
+          style={{
+            borderRadius: '9px',
+            padding: '10px 20px',
+          }}
+        >
+          Cancel
+        </button>
+
+        <button
+          type="button"
+          className="primary-button"
+          onClick={() => {
+            setShowConfirmCreate(false)
+            performSave()
+          }}
+          style={{
+            borderRadius: '9px',
+            padding: '10px 22px',
+            background: '#15803d',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+          }}
+        >
+          Confirm & Create
+          <ArrowRight className="w-4 h-4" />
+        </button>
+      </div>
+    </div>
+  </div>
+)}
+
     </>
   )
 }

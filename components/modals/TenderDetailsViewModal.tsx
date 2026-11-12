@@ -317,6 +317,15 @@ export function TenderDetailsViewModal({ tender, onClose, onEdit }: TenderDetail
                 <span className="text-slate-800">{bid?.rfsDate || '—'}</span>
               </div>
               <div>
+                <span className="text-slate-400 block font-medium">Corrigendum</span>
+                <span className="text-slate-800 font-medium">
+                  {bid?.corrigendum ||
+                    (tender.corrigenda && tender.corrigenda.length > 0
+                      ? tender.corrigenda.map(c => `${c.corrigendumNo || 'Corrigendum'}${c.issueDate ? ` (${c.issueDate})` : ''}`).join(', ')
+                      : '—')}
+                </span>
+              </div>
+              <div>
                 <span className="text-slate-400 block font-medium">Financial Req (Cr)</span>
                 <span className="text-slate-800">{bid?.financialRequirementCr ? `₹ ${bid.financialRequirementCr} Cr` : '—'}</span>
               </div>

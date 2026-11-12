@@ -40,6 +40,9 @@ import {
   DownloadableFileInfo,
 } from '@/components/chat/DownloadableFileCard'
 import { generateFileByFormat } from '@/lib/document-file-generator'
+import { SourceCitationCard } from '@/components/chat/SourceCitationCard'
+import { ProcessingProgressIndicator } from '@/components/chat/ProcessingProgressIndicator'
+import { ProcessingProgress } from '@/types/document-understanding'
 import {
   ChatConversation,
   ChatMessage,
@@ -119,6 +122,8 @@ export default function TenderQueryPage() {
   const [attachedFiles, setAttachedFiles] = useState<ParsedFileInfo[]>([])
   const [isParsingFiles, setIsParsingFiles] = useState(false)
   const [isDragOver, setIsDragOver] = useState(false)
+  const [processingProgress, setProcessingProgress] = useState<ProcessingProgress | null>(null)
+  const [processingFileName, setProcessingFileName] = useState<string>('')
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -190,8 +195,11 @@ export default function TenderQueryPage() {
         alert(`File "${file.name}" exceeds the 25MB limit. Please upload a smaller document.`)
         continue
       }
+      setProcessingFileName(file.name)
       try {
-        const parsed = await parseFileForChat(file)
+        const parsed = await parseFileForChat(file, progress => {
+          setProcessingProgress(progress)
+        })
         parsedResults.push(parsed)
       } catch (err) {
         console.error('File parsing error:', err)
@@ -200,6 +208,8 @@ export default function TenderQueryPage() {
 
     setAttachedFiles(prev => [...prev, ...parsedResults])
     setIsParsingFiles(false)
+    setProcessingProgress(null)
+    setProcessingFileName('')
     if (fileInputRef.current) {
       fileInputRef.current.value = ''
     }
@@ -447,6 +457,15 @@ export default function TenderQueryPage() {
       textareaRef.current.style.height = 'auto'
     }
     setLoading(true)
+    if (currentFiles.length > 0) {
+      setProcessingFileName(currentFiles[0].name)
+      setProcessingProgress({
+        stage: 'analyzing_document',
+        stageLabel: 'Analyzing Document Context',
+        percent: 65,
+        message: `Analyzing ${currentFiles[0].pageCount || currentFiles[0].chunks?.length || 'document'} pages for verified answer...`,
+      })
+    }
 
     const currentTender =
       selectedTenderId !== 'all' ? tenders.find(t => t.id === selectedTenderId) : undefined
@@ -481,6 +500,11 @@ export default function TenderQueryPage() {
             dataUrl: f.dataUrl,
             extractedText: f.extractedText,
             isImage: f.isImage,
+            pageCount: f.pageCount,
+            sheetCount: f.sheetCount,
+            rowCount: f.rowCount,
+            isScanned: f.isScanned,
+            chunks: f.chunks,
           })),
         }),
       })
@@ -503,6 +527,10 @@ export default function TenderQueryPage() {
         sourceCount: data.sourceCount ?? tenders.length,
         grounded: data.grounded ?? true,
         generatedFiles: generatedFiles.length > 0 ? generatedFiles : undefined,
+        sources: data.sources,
+        verification: data.verification,
+        conflicts: data.conflicts,
+        totalPagesAnalyzed: data.totalPagesAnalyzed,
       }
 
       const finalConv: ChatConversation = {
@@ -539,6 +567,8 @@ export default function TenderQueryPage() {
       await saveConversation(errorConv, errorList)
     } finally {
       setLoading(false)
+      setProcessingProgress(null)
+      setProcessingFileName('')
       setTimeout(() => textareaRef.current?.focus(), 100)
     }
   }
@@ -744,6 +774,16 @@ export default function TenderQueryPage() {
                       <div>
                         <MarkdownContent content={msg.content} />
 
+                        {/* Verified Document Sources & Ground-Truth Verification */}
+                        {(msg.sources?.length || msg.verification || msg.conflicts?.length) ? (
+                          <SourceCitationCard
+                            sources={msg.sources}
+                            verification={msg.verification}
+                            conflicts={msg.conflicts}
+                            totalPagesAnalyzed={msg.totalPagesAnalyzed}
+                          />
+                        ) : null}
+
                         {/* Downloadable File Cards */}
                         {msg.generatedFiles && msg.generatedFiles.length > 0 && (
                           <div className="mt-3 pt-3 border-t border-slate-200/60 space-y-2">
@@ -839,20 +879,30 @@ export default function TenderQueryPage() {
               </div>
             ))}
 
-            {/* AI Generating Indicator */}
+            {/* AI Generating Indicator & Universal Document Progress */}
             {loading && (
-              <div className="flex gap-3 sm:gap-4 justify-start items-start animate-fade-in">
-                <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center text-white shadow-sm flex-shrink-0 animate-pulse">
-                  <Bot className="w-4 h-4 sm:w-5 sm:h-5" />
-                </div>
-                <div className="bg-slate-50 border border-slate-200/90 rounded-2xl rounded-tl-xs px-4 py-3 shadow-xs">
-                  <div className="flex items-center gap-2 text-xs font-medium text-slate-600">
-                    <span className="flex gap-1">
-                      <span className="w-2 h-2 rounded-full bg-blue-600 animate-bounce [animation-delay:-0.3s]" />
-                      <span className="w-2 h-2 rounded-full bg-blue-600 animate-bounce [animation-delay:-0.15s]" />
-                      <span className="w-2 h-2 rounded-full bg-blue-600 animate-bounce" />
-                    </span>
-                    <span>Tender Query is analyzing documents & live records...</span>
+              <div className="flex flex-col gap-2 animate-fade-in max-w-xl">
+                {processingProgress && (
+                  <ProcessingProgressIndicator
+                    progress={processingProgress}
+                    fileName={processingFileName}
+                  />
+                )}
+                <div className="flex gap-3 sm:gap-4 justify-start items-start">
+                  <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center text-white shadow-sm flex-shrink-0 animate-pulse">
+                    <Bot className="w-4 h-4 sm:w-5 sm:h-5" />
+                  </div>
+                  <div className="bg-slate-50 border border-slate-200/90 rounded-2xl rounded-tl-xs px-4 py-3 shadow-xs">
+                    <div className="flex items-center gap-2 text-xs font-medium text-slate-600">
+                      <span className="flex gap-1">
+                        <span className="w-2 h-2 rounded-full bg-blue-600 animate-bounce [animation-delay:-0.3s]" />
+                        <span className="w-2 h-2 rounded-full bg-blue-600 animate-bounce [animation-delay:-0.15s]" />
+                        <span className="w-2 h-2 rounded-full bg-blue-600 animate-bounce" />
+                      </span>
+                      <span>
+                        {processingProgress?.message || 'Tender Query AI is reading document context & verifying sources...'}
+                      </span>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -916,9 +966,18 @@ export default function TenderQueryPage() {
             )}
 
             {isParsingFiles && (
-              <div className="mb-2 flex items-center gap-2 text-xs text-blue-600 px-2 animate-pulse">
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                <span>Reading and extracting document text for AI analysis...</span>
+              <div className="mb-2">
+                {processingProgress ? (
+                  <ProcessingProgressIndicator
+                    progress={processingProgress}
+                    fileName={processingFileName}
+                  />
+                ) : (
+                  <div className="flex items-center gap-2 text-xs text-blue-600 px-2 animate-pulse">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Reading and extracting document structure for AI analysis...</span>
+                  </div>
+                )}
               </div>
             )}
 

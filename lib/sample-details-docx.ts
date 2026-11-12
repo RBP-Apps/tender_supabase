@@ -50,6 +50,7 @@ export function generateSampleFieldContents(
   const items = autoFetchData?.detectedContext.items.length
     ? autoFetchData.detectedContext.items
     : components.map(c => c.item).filter(Boolean)
+  const mafMakesList = makes.length > 0 ? makes.join(', ') : 'OEM Manufacturer'
 
   const tenderId = tender.id
   const tenderTitle = tender.title
@@ -64,100 +65,92 @@ export function generateSampleFieldContents(
   })
 
   // -------------------------------------------------------------
-  // 1. MAF LETTER
+  // 1. MAF LETTER (Pattern: Generic_MAF_CREDA_SCIP_CGGY_RBP)
   // -------------------------------------------------------------
   const mafDoc = sd?.mafLetter || autoFetchData?.mafLetter
   const isMafDocUploaded = !!mafDoc
-  const mafMakesList = makes.length > 0 ? makes.join(', ') : 'Rotomag Motors / OEM Manufacturer'
-  const mafItemsList = items.length > 0 ? items.join(', ') : (workName || 'Solar PV Equipment & Pumping Systems')
+
+  // Determine Authority Short Name (e.g. "CREDA")
+  const fullAuth = bid?.authorityFullName || tender.authority || 'CREDA'
+  const matchAuth = fullAuth.match(/\(([^)]+)\)/)
+  const authorityShort = matchAuth
+    ? matchAuth[1].trim()
+    : fullAuth.toLowerCase().includes('creda')
+    ? 'CREDA'
+    : tender.authority.split(' ')[0] || 'CREDA'
+
+  // Addressee details
+  const addresseeDesignation = bid?.addresseeDesignation || 'The Chief Engineer'
+  const authorityAddressLines = (
+    bid?.authorityAddress ||
+    (tender.department ? `${tender.department}, ${tender.state}` : tender.state)
+  ).trim()
+
+  // Subject line: e.g. "CREDA E-Bid Document No. 200500/CREDA/SCIP&CGGY/2026-27"
+  const tenderDocRef =
+    rfsNo && rfsNo !== 'N/A'
+      ? `${authorityShort} E-Bid Document No. ${rfsNo}`
+      : `${authorityShort} Tender Ref. ${tenderId}`
+
+  // Reference line: e.g. "NIT Ref. No. 8519/CREDA/SCIP & CGGY/2026 dated 28.09.2026"
+  const refLine =
+    rfsNo && rfsNo !== 'N/A'
+      ? `NIT Ref. No. ${rfsNo}${bid?.rfsDate ? ` dated ${bid.rfsDate}` : ''}`
+      : `NIT Ref. No. ${tenderId}${bid?.rfsDate ? ` dated ${bid.rfsDate}` : ''}`
+
+  // Component description
+  const componentDesc =
+    components.length > 0
+      ? components.map(c => `${c.item}${c.make ? ` (Make: ${c.make})` : ''}`).join(', ')
+      : items.length > 0
+      ? items.join(', ')
+      : '______________________'
+
+  // Full Work / Project Scope
+  const workScope =
+    workName ||
+    'Standardization of Rates for Survey, Design, Supply, Installation & Commissioning of SPV Community Irrigation Project & Chhattisgarh Gaon Ganga Yojana with all allied works'
 
   // Always found = true: If tender doesn't have it, AI generates the standard/dummy format!
   const mafFound = true
   const mafNotFoundReason = ''
 
-  let mafText = ''
-  if (isMafDocUploaded || bid?.mafRequirement || makes.length > 0) {
-    mafText = `MANUFACTURER AUTHORIZATION FORM (MAF)
-Ref No: MAF/${tenderId}/${new Date().getFullYear()}
-Date: ${currentDate}
+  const mafText = `MANUFACTURER AUTHORIZATION FORM (MAF)
+(To be issued on the Manufacturer’s Letterhead)
+
+Date: ____________________
 
 To,
-${bid?.addresseeDesignation || 'The Executive Engineer / Tendering Authority'},
-${authorityName},
-${authorityAddress}
+${addresseeDesignation}
+${fullAuth}
+${authorityAddressLines}
 
-Subject: Manufacturer Authorization for Tender Ref: ${tenderId} • RfS No: ${rfsNo}
-Work / Project: "${workName}"
+Subject: Manufacturer Authorization for ${tenderDocRef}
+Reference: ${refLine}
 
 Dear Sir/Madam,
 
-We, the undersigned, who are established and reputable manufacturers of ${mafItemsList}, having our authorized manufacturing facilities and registered works at ${COMPANY.address}, do hereby confirm that:
+We, M/s. ________________________________________________, having our registered office/factory at ________________________________________________________________________________________, are the manufacturer/authorized manufacturer of the component ${componentDesc}
 
-1. Authorization of Bidder:
-We hereby formally authorize M/s ${COMPANY.name} (CIN: ${COMPANY.cin}), having its registered office at ${COMPANY.address}, to submit a bid, negotiate, and conclude the contract with your esteemed department against the subject Tender (${tenderId}) for the supply of equipment manufactured by us.
+We hereby authorize M/s. RBP Energy (India) Private Limited, having its address at 303, Guru Ghasidas Plaza, Amapara, G.E. Road, Raipur – 492001, Chhattisgarh, India, to participate in the above-mentioned ${authorityShort} tender and to offer/supply the above-mentioned component/product for the work relating to the ${workScope}, in accordance with the tender requirements.
 
-2. Scope of Equipment & Make(s):
-The authorization covers the following proposed components and OEM make(s):
-${components.length > 0
-  ? components.map((c, i) => `   (${i + 1}) Item: ${c.item} | Make: ${c.make || 'Rotomag'} | Compliance: ${c.compliance || 'Applicable IS/IEC'}`).join('\n')
-  : `   • Proposed OEM Make: ${mafMakesList}\n   • Equipment Category: ${mafItemsList}`}
+We confirm that the component/product offered by the bidder shall comply with the applicable technical specifications, quality standards, and requirements of the tender document. Wherever required under the tender, we shall provide the relevant valid test report(s), certificates, technical documents, and supporting information for the authorized component/product.
 
-3. Manufacturer Warranty & Guarantee:
-We guarantee that all components supplied under this tender will be genuine, brand-new, and strictly comply with the technical specifications outlined in the Tender Documents. We extend our full manufacturer warranty, technical field support, and spare parts availability for the entire warranty period of ${bid?.bidValidityDays || '180'} days or the project lifecycle.
+We further confirm that this authorization is valid for the above-mentioned tender and that we shall extend necessary technical support and cooperation to the bidder for the authorized component/product, subject to the terms and conditions of the tender and our applicable obligations.
 
-4. Tender Condition Compliance:
-${bid?.mafRequirement ? `Requirement Ref: "${bid.mafRequirement}"\n` : ''}We confirm that M/s ${COMPANY.name} has our full technical and logistical backing to fulfill all obligations under this contract without default.
+This authorization is issued for submission to ${authorityShort} in connection with the above-mentioned tender.
 
 Yours faithfully,
 
-For and on behalf of Manufacturer / OEM:
-Authorized Signatory: ${COMPANY.signatory}
-Designation: ${COMPANY.signatoryDesignation}
-Company: ${COMPANY.name}
-Factory Address: ${COMPANY.address}
-Email: ${COMPANY.email} | Phone: ${COMPANY.phone}
-[Official Seal / Stamp]`
-  } else {
-    // Standard Dummy Template Format (per AI chat template) pre-populated with Tender data
-    mafText = `Manufacturer Authorization Form (MAF)
-Date: ${currentDate}
+For M/s. ________________________________________________
+Authorized Signatory: _____________________________________
+Name: _________________________________________________
+Designation: ____________________________________________
+Mobile No.: _____________________________________________
+Email ID: ______________________________________________
+Manufacturer’s Seal & Signature
 
-To,
-${bid?.addresseeDesignation || 'The Executive Engineer / Tendering Authority'},
-${authorityName},
-${authorityAddress}
-
-Subject: Manufacturer Authorization for ${workName} (Tender ID: ${tenderId})
-
-Dear Sir/Madam,
-
-We, ${COMPANY.name} [Manufacturer's Name], located at ${COMPANY.address} [Manufacturer's Address], hereby authorize M/s ${COMPANY.name} [Vendor / Bidder's Name] to submit a bid and provide the following product/service on our behalf against Tender Ref: ${tenderId} • RfS No: ${rfsNo}:
-
-• Product/Service Name: ${workName}
-• Model/Version: Standard Production Specification Models
-• Equipment Category: ${mafItemsList}
-• OEM Make: ${mafMakesList}
-
-We confirm that M/s ${COMPANY.name} is our authorized distributor/dealer and manufacturer partner, authorized to provide all necessary support, warranty, and field services for the above-mentioned product/service.
-
-Contact Details of Manufacturer:
-• Contact Person: ${COMPANY.signatory}
-• Designation: ${COMPANY.signatoryDesignation}
-• Phone Number: ${COMPANY.phone}
-• Email Address: ${COMPANY.email}
-• Corporate Identity (CIN): ${COMPANY.cin}
-• Factory Works: ${COMPANY.address}
-
-We assure you of our full support and cooperation in fulfilling the requirements of the tender.
-
-Sincerely,
-
-[Signature]
-Name of the Authorized Signatory: ${COMPANY.signatory}
-Designation: ${COMPANY.signatoryDesignation}
-Manufacturer's Name: ${COMPANY.name}
-Contact Information: ${COMPANY.email} | ${COMPANY.phone}`
-  }
+Note: This is a generic draft. The manufacturer should issue it on its own letterhead, complete the manufacturer and component details, and attach any test report/certificate specifically required for that component under the tender.`
 
   // -------------------------------------------------------------
   // 2. TEST REPORT
@@ -332,11 +325,11 @@ Received the above physical samples in sealed and acceptable condition for techn
       notFoundReason: mafNotFoundReason,
       textContent: mafText,
       sourceDocumentName: mafDoc?.name,
-      sourceOrigin: mafDoc?.referenceNote || (isMafDocUploaded ? 'Uploaded Document' : 'AI Generated Standard Format'),
+      sourceOrigin: mafDoc?.referenceNote || (isMafDocUploaded ? 'Uploaded Document' : 'Generic MAF Draft (RBP Pattern)'),
       attributes: [
-        { label: 'Format Type', value: isMafDocUploaded ? 'Uploaded / Linked' : 'AI Standard MAF Format' },
-        { label: 'Authorized Make', value: mafMakesList },
-        { label: 'Authorized Bidder', value: COMPANY.name },
+        { label: 'Format Type', value: 'Generic MAF Draft (Letterhead)' },
+        { label: 'Authorized Bidder', value: 'RBP Energy (India) Pvt. Ltd.' },
+        { label: 'Tendering Authority', value: authorityShort },
         { label: 'Tender Ref', value: tenderId },
       ],
     },
@@ -409,6 +402,126 @@ export async function downloadSampleDocx(
   // Split text content into paragraphs (using customText if user edited it)
   const effectiveText = customText !== undefined ? customText : field.textContent
   const rawParagraphs = effectiveText.split('\n')
+
+  // Dedicated clean Word document for MAF Letter (Generic_MAF_CREDA_SCIP_CGGY_RBP pattern)
+  if (field.key === 'mafLetter') {
+    const docChildren: any[] = []
+
+    rawParagraphs.forEach(line => {
+      const trimmed = line.trim()
+      if (!trimmed) {
+        docChildren.push(new Paragraph({ text: '', spacing: { after: 120 } }))
+        return
+      }
+
+      if (trimmed === 'MANUFACTURER AUTHORIZATION FORM (MAF)') {
+        docChildren.push(
+          new Paragraph({
+            children: [new TextRun({ text: trimmed, bold: true, size: 26, color: '111827' })],
+            alignment: AlignmentType.CENTER,
+            spacing: { before: 100, after: 40 },
+          })
+        )
+      } else if (trimmed === '(To be issued on the Manufacturer’s Letterhead)') {
+        docChildren.push(
+          new Paragraph({
+            children: [new TextRun({ text: trimmed, italics: true, size: 20, color: '4B5563' })],
+            alignment: AlignmentType.CENTER,
+            spacing: { after: 200 },
+          })
+        )
+      } else if (trimmed.startsWith('Subject:') || trimmed.startsWith('Reference:')) {
+        const colonIdx = trimmed.indexOf(':')
+        docChildren.push(
+          new Paragraph({
+            children: [
+              new TextRun({ text: trimmed.slice(0, colonIdx + 1) + ' ', bold: true, size: 22 }),
+              new TextRun({ text: trimmed.slice(colonIdx + 1).trim(), bold: true, size: 22 }),
+            ],
+            spacing: { before: 60, after: 60 },
+          })
+        )
+      } else if (trimmed.startsWith('Note:')) {
+        docChildren.push(
+          new Paragraph({
+            children: [
+              new TextRun({ text: 'Note: ', bold: true, italics: true, size: 19, color: '4B5563' }),
+              new TextRun({ text: trimmed.slice(5).trim(), italics: true, size: 19, color: '4B5563' }),
+            ],
+            spacing: { before: 200, after: 60 },
+          })
+        )
+      } else if (
+        trimmed === 'To,' ||
+        trimmed === 'Dear Sir/Madam,' ||
+        trimmed === 'Yours faithfully,' ||
+        trimmed.startsWith('For M/s.') ||
+        trimmed === 'Manufacturer’s Seal & Signature'
+      ) {
+        docChildren.push(
+          new Paragraph({
+            children: [new TextRun({ text: trimmed, bold: true, size: 22 })],
+            spacing: { before: 100, after: 40 },
+          })
+        )
+      } else if (
+        trimmed.startsWith('Authorized Signatory:') ||
+        trimmed.startsWith('Name:') ||
+        trimmed.startsWith('Designation:') ||
+        trimmed.startsWith('Mobile No.:') ||
+        trimmed.startsWith('Email ID:') ||
+        trimmed.startsWith('Date:')
+      ) {
+        const colonIdx = trimmed.indexOf(':')
+        docChildren.push(
+          new Paragraph({
+            children: [
+              new TextRun({ text: trimmed.slice(0, colonIdx + 1) + ' ', bold: true, size: 21 }),
+              new TextRun({ text: trimmed.slice(colonIdx + 1).trim(), size: 21 }),
+            ],
+            spacing: { after: 40 },
+          })
+        )
+      } else {
+        docChildren.push(
+          new Paragraph({
+            children: [new TextRun({ text: line, size: 22 })],
+            spacing: { after: 120 },
+            alignment: AlignmentType.JUSTIFIED,
+          })
+        )
+      }
+    })
+
+    const doc = new Document({
+      sections: [
+        {
+          properties: {
+            page: {
+              margin: {
+                top: 1440,
+                bottom: 1440,
+                left: 1440,
+                right: 1440,
+              },
+            },
+          },
+          children: docChildren,
+        },
+      ],
+    })
+
+    const blob = await Packer.toBlob(doc)
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `Generic_MAF_${tenderId}.docx`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    return
+  }
 
   const docChildren: any[] = [
     // Top Title

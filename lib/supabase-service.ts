@@ -16,6 +16,7 @@ import {
   Masters,
   NegotiationData,
   NegotiationHistoryEntry,
+  PortalChecklistItem,
   PortalUploadData,
   PortalUploadDocumentItem,
   PortalUploadHistoryEntry,
@@ -477,28 +478,74 @@ export function mapDbRowToTender(row: any): Tender {
     }
   }
 
-  // Map Corrigenda
-  const corrigenda: CorrigendumRecord[] = (row.tender_corrigenda || []).map((c: any) => ({
-    id: c.id,
-    corrigendumNo: c.corrigendum_no,
-    issueDate: c.issue_date,
-    tenderRef: c.tender_ref,
-    fileName: c.file_name || '',
-    uploadedAt: c.uploaded_at || '',
-    overview: c.overview || '',
-    changes: (c.tender_corrigendum_changes || []).map((ch: any): CorrigendumChangeItem => ({
-      id: ch.id,
-      type: ch.change_type,
-      category: ch.category || 'standard',
-      targetField: ch.target_field,
-      originalValue: ch.original_value || '',
-      revisedValue: ch.revised_value || '',
-      description: ch.description || '',
-      pageClauseRef: ch.page_clause_ref,
-      isCritical: ch.is_critical,
-      applied: ch.applied,
-    })),
-  }))
+  // Map Corrigenda: Prefer row.corrigenda (direct JSONB on tenders table), then tender_corrigenda relation
+  let corrigenda: CorrigendumRecord[] = []
+  if (Array.isArray(row.corrigenda) && row.corrigenda.length > 0) {
+    corrigenda = row.corrigenda
+  } else if (Array.isArray(row.tender_corrigenda) && row.tender_corrigenda.length > 0) {
+    corrigenda = row.tender_corrigenda.map((c: any) => ({
+      id: c.id,
+      corrigendumNo: c.corrigendum_no,
+      issueDate: c.issue_date,
+      tenderRef: c.tender_ref,
+      fileName: c.file_name || '',
+      fileUrl: c.file_url || null,
+      dataUrl: c.file_url || null,
+      fileSize: c.file_size || null,
+      uploadedAt: c.uploaded_at || '',
+      overview: c.overview || '',
+      changes: (c.tender_corrigendum_changes || []).map((ch: any): CorrigendumChangeItem => ({
+        id: ch.id,
+        type: ch.change_type,
+        category: ch.category || 'standard',
+        targetField: ch.target_field,
+        originalValue: ch.original_value || '',
+        revisedValue: ch.revised_value || '',
+        description: ch.description || '',
+        pageClauseRef: ch.page_clause_ref,
+        isCritical: ch.is_critical,
+        applied: ch.applied,
+      })),
+    }))
+  }
+
+  // Ensure bid has corrigendum string if corrigenda records exist or row.corrigendum exists
+  const fallbackCorr = (typeof row.corrigendum === 'string' && row.corrigendum.trim()) ||
+    (corrigenda.length > 0
+      ? corrigenda.map((c: any) => `${c.corrigendumNo || 'Corrigendum'}${c.issueDate ? ` dated ${c.issueDate}` : ''}`).join(', ')
+      : '')
+
+  if (bid && (!bid.corrigendum || !bid.corrigendum.trim()) && fallbackCorr) {
+    bid.corrigendum = fallbackCorr
+  } else if (!bid && fallbackCorr) {
+    bid = {
+      rfsNo: '',
+      rfsDate: '',
+      corrigendum: fallbackCorr,
+      workName: row.title || '',
+      shortWorkName: '',
+      authorityFullName: row.authority || '',
+      addresseeDesignation: '',
+      authorityAddress: '',
+      bidDeadlineTime: '',
+      tenderFeePerPackage: '',
+      gstSection: row.gst_section || '',
+      tenderFeePlusGst: row.tender_fee_plus_gst || '',
+      testReportCompliance: row.test_report_compliance || '',
+      mafRequirement: row.maf_requirement || '',
+      experienceRequirement: row.experience_requirement || '',
+      turnoverRequirement: row.turnover_requirement || '',
+      bidValidityDays: '180',
+      financialRequirementCr: '',
+      technicalRequirement: '',
+      jurisdiction: '',
+      signingDate: '',
+      place: 'Anand',
+      packages: [],
+      technicalComponents: [],
+      beneficiaryBank: { accountHolder: '', bankName: '', branch: '', accountNo: '', ifsc: '', accountType: '' },
+    }
+  }
 
   // Map Stage 01: Eligibility Check
   let eligibilityCheck: EligibilityCheckData | undefined = undefined
@@ -513,6 +560,7 @@ export function mapDbRowToTender(row: any): Tender {
       otherDoc: ecRow.other_doc || null,
       remarks: ecRow.remarks || '',
       completedAt: ecRow.completed_at || undefined,
+      aiVerification: ecRow.ai_verification || undefined,
     }
   }
 
@@ -831,21 +879,23 @@ export function mapDbRowToTender(row: any): Tender {
     }
   }
 
-  // Map tenderDoc from repository
-  let tenderDoc: any = undefined
-  const nitDocRow = (row.tender_documents_repository || []).find(
-    (d: any) => d.document_type === 'tender-notice'
-  )
-  if (nitDocRow) {
-    tenderDoc = {
-      id: nitDocRow.id,
-      name: nitDocRow.file_name,
-      size: nitDocRow.file_size,
-      type: nitDocRow.mime_type,
-      uploadedAt: nitDocRow.created_at,
-      dataUrl: nitDocRow.file_url,
-      source: 'new-tender',
-      referenceNote: nitDocRow.document_title,
+  // Map tenderDoc: Prefer direct JSONB on tenders row, then tender_documents_repository
+  let tenderDoc: any = row.tender_doc || undefined
+  if (!tenderDoc) {
+    const nitDocRow = (row.tender_documents_repository || []).find(
+      (d: any) => d.document_type === 'tender-notice'
+    )
+    if (nitDocRow) {
+      tenderDoc = {
+        id: nitDocRow.id,
+        name: nitDocRow.file_name,
+        size: nitDocRow.file_size,
+        type: nitDocRow.mime_type,
+        uploadedAt: nitDocRow.created_at,
+        dataUrl: nitDocRow.file_url,
+        source: 'new-tender',
+        referenceNote: nitDocRow.document_title,
+      }
     }
   }
 
@@ -930,7 +980,7 @@ export async function fetchTendersFromSupabase(): Promise<Tender[]> {
     console.warn('fetchTendersFromSupabase Tier 1 threw exception:', t1Err)
   }
 
-  // Tier 2: Core Stages Query (Without optional repository/history tables)
+  // Tier 2: Core Stages Query (With corrigenda & repository)
   try {
     const { data, error } = await supabase
       .from('tenders')
@@ -939,12 +989,17 @@ export async function fetchTendersFromSupabase(): Promise<Tender[]> {
         tender_bid_details (*),
         tender_packages (*),
         tender_technical_components (*),
+        tender_corrigenda (
+          *,
+          tender_corrigendum_changes (*)
+        ),
         stage_01_eligibility_check (*),
         stage_02_sample_details (*),
         stage_03_emd_ready (*),
         stage_04_document_ready (*),
         stage_05_portal_upload (*),
-        stage_06_submit_in_website (*)
+        stage_06_submit_in_website (*),
+        tender_documents_repository (*)
       `)
       .order('created_at', { ascending: false })
 
@@ -984,9 +1039,83 @@ export async function fetchTendersFromSupabase(): Promise<Tender[]> {
 
 export async function saveTenderToSupabase(tender: Tender): Promise<void> {
   try {
-    // 1. Upsert primary tender record
-    const { error: tenderError } = await supabase.from('tenders').upsert(
-      {
+    // 0. Pre-upload tenderDoc to bucket if it contains base64 dataUrl
+    if (tender.tenderDoc && tender.tenderDoc.dataUrl && tender.tenderDoc.dataUrl.startsWith('data:')) {
+      try {
+        const uploadRes = await uploadToSupabaseBucket({
+          dataUrl: tender.tenderDoc.dataUrl,
+          fileName: tender.tenderDoc.name || 'tender_notice.pdf',
+          folder: STAGE_FOLDERS.STAGE_01_NOTICE,
+          tenderId: tender.id,
+        })
+        if (uploadRes.storage === 'bucket' && uploadRes.url) {
+          tender.tenderDoc.dataUrl = uploadRes.url
+        }
+      } catch (e) {
+        console.warn('Storage upload error for tenderDoc:', e)
+      }
+    }
+
+    // 0.1 Pre-upload corrigenda files if any contain base64 dataUrl
+    if (tender.corrigenda && tender.corrigenda.length > 0) {
+      for (const c of tender.corrigenda) {
+        const rawUrl = c.fileUrl || c.dataUrl
+        if (rawUrl && rawUrl.startsWith('data:')) {
+          try {
+            const uploadRes = await uploadToSupabaseBucket({
+              dataUrl: rawUrl,
+              fileName: c.fileName || `${c.corrigendumNo || 'corrigendum'}.pdf`,
+              folder: 'stage-01-corrigendum',
+              tenderId: tender.id,
+            })
+            if (uploadRes.storage === 'bucket' && uploadRes.url) {
+              c.fileUrl = uploadRes.url
+              c.dataUrl = uploadRes.url
+            }
+          } catch (e) {
+            console.warn('Storage upload error for corrigendum:', e)
+          }
+        }
+      }
+    }
+
+    // 1. Upsert primary tender record with JSONB columns for direct persistence
+    const fullTenderPayload: any = {
+      id: tender.id,
+      title: tender.title,
+      authority: tender.authority,
+      department: tender.department,
+      state: tender.state,
+      estimated_value: tender.value || null,
+      stage: tender.stage,
+      status: tender.status,
+      due_date: tender.due && /^\d{4}-\d{2}-\d{2}/.test(tender.due) ? tender.due.slice(0, 10) : null,
+      owner: tender.owner || 'Admin',
+      remarks: tender.remarks || null,
+      planned_date: tender.planned_date && /^\d{4}-\d{2}-\d{2}/.test(tender.planned_date)
+        ? tender.planned_date.slice(0, 10)
+        : null,
+      actual_date: tender.actual_date && /^\d{4}-\d{2}-\d{2}/.test(tender.actual_date)
+        ? tender.actual_date.slice(0, 10)
+        : (tender.status === 'Completed' ? new Date().toISOString().slice(0, 10) : null),
+      tender_doc: tender.tenderDoc || null,
+      corrigenda: tender.corrigenda || [],
+      gst_section: tender.bid?.gstSection || tender.gstSection || null,
+      tender_fee_plus_gst: tender.bid?.tenderFeePlusGst || tender.tenderFeePlusGst || null,
+      test_report_compliance: tender.bid?.testReportCompliance || tender.testReportCompliance || null,
+      maf_requirement: tender.bid?.mafRequirement || tender.mafRequirement || null,
+      experience_requirement: tender.bid?.experienceRequirement || tender.experienceRequirement || null,
+      turnover_requirement: tender.bid?.turnoverRequirement || tender.turnoverRequirement || null,
+    }
+
+    let { error: tenderError } = await supabase.from('tenders').upsert(
+      fullTenderPayload,
+      { onConflict: 'id' }
+    )
+
+    if (tenderError) {
+      console.warn('Upsert tenders with extended columns failed, falling back to core columns:', tenderError.message)
+      const coreTenderPayload = {
         id: tender.id,
         title: tender.title,
         authority: tender.authority,
@@ -998,35 +1127,17 @@ export async function saveTenderToSupabase(tender: Tender): Promise<void> {
         due_date: tender.due && /^\d{4}-\d{2}-\d{2}/.test(tender.due) ? tender.due.slice(0, 10) : null,
         owner: tender.owner || 'Admin',
         remarks: tender.remarks || null,
-        planned_date: tender.planned_date && /^\d{4}-\d{2}-\d{2}/.test(tender.planned_date)
-          ? tender.planned_date.slice(0, 10)
-          : null,
-        actual_date: tender.actual_date && /^\d{4}-\d{2}-\d{2}/.test(tender.actual_date)
-          ? tender.actual_date.slice(0, 10)
-          : (tender.status === 'Completed' ? new Date().toISOString().slice(0, 10) : null),
-      },
-      { onConflict: 'id' }
-    )
-
-    if (tenderError) throw tenderError
-
-    // 1.1 Persist tenderDoc in repository if present
-    if (tender.tenderDoc) {
-      let tenderDocUrl = tender.tenderDoc.dataUrl || null
-      let storagePath = 'local'
-      if (tenderDocUrl && tenderDocUrl.startsWith('data:')) {
-        const uploadRes = await uploadToSupabaseBucket({
-          dataUrl: tenderDocUrl,
-          fileName: tender.tenderDoc.name || 'tender_notice.pdf',
-          folder: STAGE_FOLDERS.STAGE_01_NOTICE,
-          tenderId: tender.id,
-        })
-        if (uploadRes.storage === 'bucket' && uploadRes.url) {
-          tenderDocUrl = uploadRes.url
-          tender.tenderDoc.dataUrl = uploadRes.url
-          storagePath = uploadRes.path
-        }
+        planned_date: fullTenderPayload.planned_date,
+        actual_date: fullTenderPayload.actual_date,
       }
+      const { error: coreErr } = await supabase.from('tenders').upsert(coreTenderPayload, { onConflict: 'id' })
+      if (coreErr) throw coreErr
+    }
+
+    // 1.1 Persist tenderDoc in repository table if present; remove if deleted
+    if (tender.tenderDoc) {
+      const tenderDocUrl = tender.tenderDoc.dataUrl || null
+      const storagePath = tenderDocUrl?.startsWith('http') ? tenderDocUrl : 'local'
 
       await supabase.from('tender_documents_repository').delete().eq('tender_id', tender.id).eq('document_type', 'tender-notice')
       await supabase.from('tender_documents_repository').insert({
@@ -1042,6 +1153,9 @@ export async function saveTenderToSupabase(tender: Tender): Promise<void> {
         source: 'manual-upload',
         uploaded_by: tender.owner || 'Admin',
       })
+    } else {
+      // If user deleted tenderDoc, remove it from repository as well
+      await supabase.from('tender_documents_repository').delete().eq('tender_id', tender.id).eq('document_type', 'tender-notice')
     }
 
     // 2. Bid details, packages, technical components
@@ -1051,7 +1165,11 @@ export async function saveTenderToSupabase(tender: Tender): Promise<void> {
         tender_id: tender.id,
         rfs_no: bid.rfsNo || null,
         rfs_date: bid.rfsDate && /^\d{4}-\d{2}-\d{2}/.test(bid.rfsDate) ? bid.rfsDate.slice(0, 10) : null,
-        corrigendum: bid.corrigendum || null,
+        corrigendum:
+          (bid.corrigendum && bid.corrigendum.trim()) ||
+          (tender.corrigenda && tender.corrigenda.length > 0
+            ? tender.corrigenda.map(c => `${c.corrigendumNo || 'Corrigendum'}${c.issueDate ? ` dated ${c.issueDate}` : ''}`).join(', ')
+            : null),
         work_name: bid.workName || null,
         short_work_name: bid.shortWorkName || null,
         authority_full_name: bid.authorityFullName || null,
@@ -1128,61 +1246,73 @@ export async function saveTenderToSupabase(tender: Tender): Promise<void> {
       }
     }
 
-    // 3. Corrigenda
-    if (tender.corrigenda && tender.corrigenda.length > 0) {
-      for (const c of tender.corrigenda) {
-        const { data: insertedCorr, error: corrErr } = await supabase
-          .from('tender_corrigenda')
-          .upsert(
-            {
+    // 3. Corrigenda table sync (delete existing and re-insert current list)
+    try {
+      await supabase.from('tender_corrigenda').delete().eq('tender_id', tender.id)
+      if (tender.corrigenda && tender.corrigenda.length > 0) {
+        for (const c of tender.corrigenda) {
+          const { data: insertedCorr, error: corrErr } = await supabase
+            .from('tender_corrigenda')
+            .insert({
               tender_id: tender.id,
               corrigendum_no: c.corrigendumNo,
               issue_date: c.issueDate && /^\d{4}-\d{2}-\d{2}/.test(c.issueDate) ? c.issueDate.slice(0, 10) : null,
               tender_ref: c.tenderRef || null,
               file_name: c.fileName || null,
+              file_url: c.fileUrl || c.dataUrl || null,
               overview: c.overview || null,
-            },
-            { onConflict: 'id' }
-          )
-          .select('id')
-          .single()
+            })
+            .select('id')
+            .single()
 
-        if (!corrErr && insertedCorr && c.changes && c.changes.length > 0) {
-          await supabase.from('tender_corrigendum_changes').delete().eq('corrigendum_id', insertedCorr.id)
-          await supabase.from('tender_corrigendum_changes').insert(
-            c.changes.map(ch => ({
-              corrigendum_id: insertedCorr.id,
-              change_type: ch.type,
-              category: ch.category || 'standard',
-              target_field: ch.targetField || null,
-              original_value: ch.originalValue || null,
-              revised_value: ch.revisedValue || null,
-              description: ch.description || null,
-              page_clause_ref: ch.pageClauseRef || null,
-              is_critical: ch.isCritical || false,
-              applied: ch.applied || false,
-            }))
-          )
+          if (!corrErr && insertedCorr && c.changes && c.changes.length > 0) {
+            await supabase.from('tender_corrigendum_changes').insert(
+              c.changes.map(ch => ({
+                corrigendum_id: insertedCorr.id,
+                change_type: ch.type,
+                category: ch.category || 'standard',
+                target_field: ch.targetField || null,
+                original_value: ch.originalValue || null,
+                revised_value: ch.revisedValue || null,
+                description: ch.description || null,
+                page_clause_ref: ch.pageClauseRef || null,
+                is_critical: ch.isCritical || false,
+                applied: ch.applied || false,
+              }))
+            )
+          }
         }
       }
+    } catch (corrErr) {
+      console.warn('Sync tender_corrigenda error:', corrErr)
     }
 
     // 4. Stage 01: Eligibility Check
     if (tender.eligibilityCheck) {
       const ec = tender.eligibilityCheck
-      await supabase.from('stage_01_eligibility_check').upsert(
-        {
-          tender_id: tender.id,
-          turnover_doc: ec.turnoverDoc || null,
-          experience_doc: ec.experienceDoc || null,
-          vendor_reg_doc: ec.vendorRegDoc || null,
-          other_doc: ec.otherDoc || null,
-          remarks: ec.remarks || null,
-          completed_at: ec.completedAt || null,
-          actual_date: ec.completedAt ? ec.completedAt.slice(0, 10) : null,
-        },
-        { onConflict: 'tender_id' }
-      )
+      const ecPayload: any = {
+        tender_id: tender.id,
+        turnover_doc: ec.turnoverDoc || null,
+        experience_doc: ec.experienceDoc || null,
+        vendor_reg_doc: ec.vendorRegDoc || null,
+        other_doc: ec.otherDoc || null,
+        remarks: ec.remarks || null,
+        completed_at: ec.completedAt || null,
+        actual_date: ec.completedAt ? ec.completedAt.slice(0, 10) : null,
+      }
+      if (ec.aiVerification) {
+        ecPayload.ai_verification = ec.aiVerification
+      }
+      const { error: ecErr } = await supabase
+        .from('stage_01_eligibility_check')
+        .upsert(ecPayload, { onConflict: 'tender_id' })
+
+      if (ecErr && ecErr.message?.includes('ai_verification')) {
+        delete ecPayload.ai_verification
+        await supabase
+          .from('stage_01_eligibility_check')
+          .upsert(ecPayload, { onConflict: 'tender_id' })
+      }
     }
 
     // 5. Stage 02: Sample Details

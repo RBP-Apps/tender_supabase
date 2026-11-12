@@ -3,6 +3,7 @@
 import { supabase } from '@/lib/supabaseClient'
 import { ParsedFileInfo } from '@/lib/document-parser'
 import { DownloadableFileInfo } from '@/components/chat/DownloadableFileCard'
+import { DocumentSourceCitation } from '@/types/document-understanding'
 
 export interface ChatMessage {
   id: string
@@ -13,6 +14,15 @@ export interface ChatMessage {
   grounded?: boolean
   attachedFiles?: ParsedFileInfo[]
   generatedFiles?: DownloadableFileInfo[]
+  sources?: DocumentSourceCitation[]
+  verification?: {
+    confidence: string
+    isVerified: boolean
+    auditNotes?: string
+    unverifiedClaims?: string[]
+  }
+  conflicts?: Array<{ field: string; values: Array<{ source: string; value: string }> }>
+  totalPagesAnalyzed?: number
 }
 
 export interface ChatConversation {

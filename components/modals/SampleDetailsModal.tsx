@@ -24,15 +24,18 @@ import {
   X,
 } from 'lucide-react'
 import {
+  FieldRequirementAudit,
   SampleDetailsData,
   SampleDetailsHistoryEntry,
   SampleDocumentItem,
+  SampleRequirementsAudit,
   Tender,
 } from '@/types/tender'
 import {
   autoFetchSampleDetails,
   autoFetchSampleDetailsWithAI,
   AutoFetchResult,
+  checkSampleRequirementsWithAI,
 } from '@/lib/sample-details-autofetch'
 import {
   downloadSampleDocx,
@@ -87,6 +90,8 @@ interface DocumentSlotProps {
   onCustomTextChange?: (text: string) => void
   onResetCustomText?: () => void
   isCustomized?: boolean
+  requirementAudit?: FieldRequirementAudit
+  isCheckingAudit?: boolean
 }
 
 function DocumentSlot({
@@ -107,6 +112,8 @@ function DocumentSlot({
   onCustomTextChange,
   onResetCustomText,
   isCustomized = false,
+  requirementAudit,
+  isCheckingAudit = false,
 }: DocumentSlotProps) {
   const [showCandidatePicker, setShowCandidatePicker] = useState(false)
   const [isEditing, setIsEditing] = useState(false)
@@ -155,6 +162,26 @@ function DocumentSlot({
             <span className="text-xs font-bold text-slate-900">
               {fieldNumber}. {title}
             </span>
+
+            {isCheckingAudit ? (
+              <span className="text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-full flex items-center gap-1 animate-pulse shadow-2xs">
+                <Loader2 className="w-2.5 h-2.5 animate-spin text-blue-600" /> AI Checking PDF...
+              </span>
+            ) : requirementAudit ? (
+              requirementAudit.status === 'Required' ? (
+                <span className="text-[10px] font-extrabold text-rose-800 bg-rose-50 border border-rose-300 px-2.5 py-0.5 rounded-full flex items-center gap-1 shadow-2xs">
+                  🔴 Mandatory in Tender
+                </span>
+              ) : requirementAudit.status === 'Not Required' ? (
+                <span className="text-[10px] font-extrabold text-emerald-800 bg-emerald-50 border border-emerald-300 px-2.5 py-0.5 rounded-full flex items-center gap-1 shadow-2xs">
+                  🟢 Not Required in Tender
+                </span>
+              ) : (
+                <span className="text-[10px] font-extrabold text-amber-800 bg-amber-50 border border-amber-300 px-2.5 py-0.5 rounded-full flex items-center gap-1 shadow-2xs">
+                  🟡 Optional in Tender
+                </span>
+              )
+            ) : null}
 
             {verificationContent ? (
               verificationContent.found ? (
@@ -246,6 +273,92 @@ function DocumentSlot({
           )}
         </div>
       </div>
+
+      {/* Dedicated AI Tender PDF Requirement Card */}
+      {requirementAudit && (
+        <div
+          className={`rounded-xl p-3 border text-xs space-y-2 transition-all ${
+            requirementAudit.status === 'Required'
+              ? 'bg-rose-50/80 border-rose-200 text-slate-800 shadow-2xs'
+              : requirementAudit.status === 'Not Required'
+              ? 'bg-emerald-50/70 border-emerald-200 text-slate-800 shadow-2xs'
+              : 'bg-amber-50/80 border-amber-200 text-slate-800 shadow-2xs'
+          }`}
+        >
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="flex items-center gap-2 font-bold">
+              <Sparkles
+                className={`w-4 h-4 ${
+                  requirementAudit.status === 'Required'
+                    ? 'text-rose-600'
+                    : requirementAudit.status === 'Not Required'
+                    ? 'text-emerald-600'
+                    : 'text-amber-600'
+                }`}
+              />
+              <span className="text-slate-900 font-extrabold text-xs">
+                AI Tender PDF Audit:
+              </span>
+              <span
+                className={`px-2 py-0.5 rounded-md font-black text-[10px] uppercase tracking-wide shadow-2xs ${
+                  requirementAudit.status === 'Required'
+                    ? 'bg-rose-600 text-white'
+                    : requirementAudit.status === 'Not Required'
+                    ? 'bg-emerald-600 text-white'
+                    : 'bg-amber-500 text-white'
+                }`}
+              >
+                {requirementAudit.status === 'Required'
+                  ? 'Mandatory Requirement'
+                  : requirementAudit.status === 'Not Required'
+                  ? 'Not Required by Tender'
+                  : 'Optional / Conditional'}
+              </span>
+            </div>
+
+            {requirementAudit.clauseOrRef && (
+              <span
+                className="text-[10px] font-mono px-2 py-0.5 rounded bg-white/90 border border-slate-200 text-slate-700 truncate max-w-[320px]"
+                title={requirementAudit.clauseOrRef}
+              >
+                Ref: {requirementAudit.clauseOrRef}
+              </span>
+            )}
+          </div>
+
+          <p className="text-[11px] text-slate-700 leading-relaxed font-normal">
+            {requirementAudit.reasoning}
+          </p>
+
+          {requirementAudit.applicableStandards && requirementAudit.applicableStandards.length > 0 && (
+            <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+              <span className="text-[10px] font-bold text-slate-600">
+                Standards / Accreditation:
+              </span>
+              {requirementAudit.applicableStandards.map((std, idx) => (
+                <span
+                  key={idx}
+                  className="px-2 py-0.5 rounded bg-white font-mono text-[10px] font-semibold text-slate-800 border border-slate-300 shadow-2xs"
+                >
+                  {std}
+                </span>
+              ))}
+            </div>
+          )}
+
+          <div className="pt-1.5 border-t border-slate-200/70 flex items-center justify-between text-[10px]">
+            {requirementAudit.status === 'Required' ? (
+              <span className="text-rose-800 font-bold flex items-center gap-1">
+                ⚠️ Mandatory Document: Upload or attach a valid certificate/report to comply with technical evaluation.
+              </span>
+            ) : (
+              <span className="text-emerald-800 font-bold flex items-center gap-1">
+                ✅ Safe to Skip: The tender document does not mandate this document. You may skip it or provide if available.
+              </span>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Candidate picker list if multiple exist */}
       {showCandidatePicker && candidates.length > 1 && !disabled && (
@@ -537,15 +650,45 @@ export function SampleDetailsModal({
   const [previewDoc, setPreviewDoc] = useState<SampleDocumentItem | null>(null)
   const [downloadingKey, setDownloadingKey] = useState<string | null>(null)
 
+  // AI Tender Requirements Audit state
+  const [requirementsAudit, setRequirementsAudit] = useState<SampleRequirementsAudit | null>(
+    existing?.aiRequirementsAudit || null
+  )
+  const [isAuditing, setIsAuditing] = useState(false)
+
+  const runRequirementAudit = async () => {
+    setIsAuditing(true)
+    try {
+      const audit = await checkSampleRequirementsWithAI(tender)
+      setRequirementsAudit(audit)
+    } catch (err) {
+      console.warn('Error running AI requirement audit:', err)
+    } finally {
+      setIsAuditing(false)
+    }
+  }
+
   // Automatically generate text verification contents for all 4 fields
   const verifiedContents = useMemo(
     () => generateSampleFieldContents(tender, autoFetchData),
     [tender, autoFetchData]
   )
 
+  // Detect whether existing stored MAF text used the old/legacy template format
+  const isLegacyMaf = !!(
+    existing?.mafLetter?.textContent &&
+    (existing.mafLetter.textContent.includes('ROTOMAG') ||
+      existing.mafLetter.textContent.includes('Rotomag') ||
+      existing.mafLetter.textContent.includes('Vitthal Udyognagar') ||
+      !existing.mafLetter.textContent.includes('RBP Energy') ||
+      !existing.mafLetter.textContent.includes('To be issued on the Manufacturer’s Letterhead'))
+  )
+
   // Editable text states for all 4 verification fields
   const [mafText, setMafText] = useState<string>(
-    existing?.mafLetter?.textContent || verifiedContents.mafLetter.textContent
+    !isLegacyMaf && existing?.mafLetter?.textContent
+      ? existing.mafLetter.textContent
+      : verifiedContents.mafLetter.textContent
   )
   const [testReportText, setTestReportText] = useState<string>(
     existing?.testReport?.textContent || verifiedContents.testReport.textContent
@@ -557,17 +700,17 @@ export function SampleDetailsModal({
     existing?.productSample?.textContent || verifiedContents.productSample.textContent
   )
 
-  const [mafEdited, setMafEdited] = useState(!!existing?.mafLetter?.textContent)
+  const [mafEdited, setMafEdited] = useState(!isLegacyMaf && !!existing?.mafLetter?.textContent)
   const [testReportEdited, setTestReportEdited] = useState(!!existing?.testReport?.textContent)
   const [bisEdited, setBisEdited] = useState(!!existing?.bisCertificate?.textContent)
   const [sampleEdited, setSampleEdited] = useState(!!existing?.productSample?.textContent)
 
-  // Sync if pristine and auto-fetch/verified content updates
+  // Sync if pristine (or legacy format) and auto-fetch/verified content updates
   useEffect(() => {
-    if (!mafEdited && verifiedContents.mafLetter.textContent) {
+    if ((!mafEdited || isLegacyMaf) && verifiedContents.mafLetter.textContent) {
       setMafText(verifiedContents.mafLetter.textContent)
     }
-  }, [verifiedContents.mafLetter.textContent, mafEdited])
+  }, [verifiedContents.mafLetter.textContent, mafEdited, isLegacyMaf])
 
   useEffect(() => {
     if (!testReportEdited && verifiedContents.testReport.textContent) {
@@ -631,6 +774,11 @@ export function SampleDetailsModal({
       .finally(() => {
         setLoadingAI(false)
       })
+
+    // 3. AI Tender Document Requirement Audit (Test Report & BIS Certificate requirement check)
+    if (!existing?.aiRequirementsAudit) {
+      runRequirementAudit()
+    }
   }, [tender])
 
   const handleAddOtherDoc = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -677,7 +825,7 @@ export function SampleDetailsModal({
           type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
           uploadedAt: new Date().toISOString(),
           source: 'auto-fetched',
-          referenceNote: 'Auto-generated MAF Authorization Letter',
+          referenceNote: 'Manufacturer Authorization Form (MAF) - Generic Draft',
           textContent: mafText,
         }
 
@@ -717,6 +865,24 @@ export function SampleDetailsModal({
           textContent: productSampleText,
         }
 
+    if (requirementsAudit?.testReport) {
+      finalTestReport.requirementStatus = requirementsAudit.testReport.status
+      finalTestReport.requirementReason = requirementsAudit.testReport.reasoning
+      finalTestReport.requirementClause = requirementsAudit.testReport.clauseOrRef
+    }
+
+    if (requirementsAudit?.bisCertificate) {
+      finalBis.requirementStatus = requirementsAudit.bisCertificate.status
+      finalBis.requirementReason = requirementsAudit.bisCertificate.reasoning
+      finalBis.requirementClause = requirementsAudit.bisCertificate.clauseOrRef
+    }
+
+    if (requirementsAudit?.productSample) {
+      finalProductSample.requirementStatus = requirementsAudit.productSample.status
+      finalProductSample.requirementReason = requirementsAudit.productSample.reasoning
+      finalProductSample.requirementClause = requirementsAudit.productSample.clauseOrRef
+    }
+
     // Build history audit entry
     const historyEntry: SampleDetailsHistoryEntry = {
       id: `hist-${Date.now()}`,
@@ -730,9 +896,10 @@ export function SampleDetailsModal({
       remarks: remarks.trim(),
       previousStage: 'Sample Details',
       advancedToStage: 'EMD Ready',
-      updateSummary: `Sample details verified. Documents: MAF, Test Report, BIS, Product Sample${
+      updateSummary: `Sample details verified. Documents: MAF, Test Report (${requirementsAudit?.testReport.status || 'Verified'}), BIS (${requirementsAudit?.bisCertificate.status || 'Verified'}), Product Sample (${requirementsAudit?.productSample?.status || 'Verified'})${
         otherDocs.length ? `, ${otherDocs.length} Other` : ''
       }`,
+      aiRequirementsAudit: requirementsAudit || undefined,
     }
 
     const previousHistory = existing?.history || []
@@ -747,6 +914,7 @@ export function SampleDetailsModal({
       completedAt: new Date().toISOString(),
       completedBy: tender.owner || 'Admin',
       history: [historyEntry, ...previousHistory],
+      aiRequirementsAudit: requirementsAudit || undefined,
     }
 
     const updatedTender: Tender = {
@@ -859,6 +1027,103 @@ export function SampleDetailsModal({
               </div>
             )}
 
+            {/* AI Tender Document Requirement Overview Banner */}
+            <div className="p-3.5 bg-gradient-to-r from-blue-50/90 via-indigo-50/70 to-purple-50/80 border border-blue-200 rounded-xl flex items-center justify-between gap-3 shadow-2xs">
+              <div className="flex items-start gap-2.5 min-w-0">
+                <div className="w-8 h-8 rounded-lg bg-blue-600 text-white flex items-center justify-center flex-shrink-0 shadow-2xs mt-0.5">
+                  <Sparkles className="w-4 h-4" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs font-bold text-slate-900">
+                      AI Tender Requirement Audit
+                    </span>
+                    {requirementsAudit ? (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300">
+                        ✔ Checked {requirementsAudit.sourceType === 'tender-pdf' ? 'from Official Tender PDF' : 'from Tender Specifications'}
+                      </span>
+                    ) : isAuditing ? (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 border border-blue-300 flex items-center gap-1 animate-pulse">
+                        <Loader2 className="w-3 h-3 animate-spin text-blue-600" /> Scanning Tender PDF...
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="flex items-center gap-2 mt-1 flex-wrap text-xs">
+                    <div className="flex items-center gap-1">
+                      <span className="text-slate-600 font-semibold text-[11px]">Test Report:</span>
+                      {requirementsAudit?.testReport ? (
+                        <span
+                          className={`px-1.5 py-0.2 rounded font-extrabold text-[10px] ${
+                            requirementsAudit.testReport.status === 'Required'
+                              ? 'bg-rose-100 text-rose-800 border border-rose-300'
+                              : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                          }`}
+                        >
+                          {requirementsAudit.testReport.status.toUpperCase()}
+                        </span>
+                      ) : (
+                        <span className="text-slate-400 text-[10px] italic">Checking...</span>
+                      )}
+                    </div>
+                    <span className="text-slate-300">•</span>
+                    <div className="flex items-center gap-1">
+                      <span className="text-slate-600 font-semibold text-[11px]">BIS Certificate:</span>
+                      {requirementsAudit?.bisCertificate ? (
+                        <span
+                          className={`px-1.5 py-0.2 rounded font-extrabold text-[10px] ${
+                            requirementsAudit.bisCertificate.status === 'Required'
+                              ? 'bg-rose-100 text-rose-800 border border-rose-300'
+                              : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                          }`}
+                        >
+                          {requirementsAudit.bisCertificate.status.toUpperCase()}
+                        </span>
+                      ) : (
+                        <span className="text-slate-400 text-[10px] italic">Checking...</span>
+                      )}
+                    </div>
+                    <span className="text-slate-300">•</span>
+                    <div className="flex items-center gap-1">
+                      <span className="text-slate-600 font-semibold text-[11px]">Product Sample:</span>
+                      {requirementsAudit?.productSample ? (
+                        <span
+                          className={`px-1.5 py-0.2 rounded font-extrabold text-[10px] ${
+                            requirementsAudit.productSample.status === 'Required'
+                              ? 'bg-rose-100 text-rose-800 border border-rose-300'
+                              : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                          }`}
+                        >
+                          {requirementsAudit.productSample.status.toUpperCase()}
+                        </span>
+                      ) : (
+                        <span className="text-slate-400 text-[10px] italic">Checking...</span>
+                      )}
+                    </div>
+                  </div>
+                  {requirementsAudit?.summary && (
+                    <p className="text-[11px] text-slate-600 mt-1 line-clamp-1">
+                      {requirementsAudit.summary}
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={runRequirementAudit}
+                disabled={isAuditing}
+                className="px-3 py-1.5 rounded-lg bg-white border border-blue-200 hover:border-blue-400 hover:bg-blue-50/60 text-blue-700 text-xs font-bold flex items-center gap-1.5 shadow-2xs transition-all cursor-pointer flex-shrink-0 disabled:opacity-60"
+                title="Re-read tender PDF and check requirements"
+              >
+                {isAuditing ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="w-3.5 h-3.5" />
+                )}
+                <span>{isAuditing ? 'Checking PDF...' : 'Re-check Tender with AI'}</span>
+              </button>
+            </div>
+
             {/* 1. MAF Letter */}
             <DocumentSlot
               fieldNumber={1}
@@ -903,6 +1168,8 @@ export function SampleDetailsModal({
                   : undefined
               }
               matchReason={autoFetchData?.matchReasons.testReport}
+              requirementAudit={requirementsAudit?.testReport}
+              isCheckingAudit={isAuditing}
               disabled={isViewOnly}
               onSelect={setTestReport}
               onPreview={setPreviewDoc}
@@ -930,6 +1197,8 @@ export function SampleDetailsModal({
               candidates={autoFetchData?.candidates.bisCertificate}
               suggestedHint="Mandatory for solar modules, inverters, pumps, and electrical equipment."
               matchReason={autoFetchData?.matchReasons.bisCertificate}
+              requirementAudit={requirementsAudit?.bisCertificate}
+              isCheckingAudit={isAuditing}
               disabled={isViewOnly}
               onSelect={setBisCertificate}
               onPreview={setPreviewDoc}
@@ -956,6 +1225,8 @@ export function SampleDetailsModal({
               document={productSample}
               candidates={autoFetchData?.candidates.productSample}
               matchReason={autoFetchData?.matchReasons.productSample}
+              requirementAudit={requirementsAudit?.productSample}
+              isCheckingAudit={isAuditing}
               disabled={isViewOnly}
               onSelect={setProductSample}
               onPreview={setPreviewDoc}

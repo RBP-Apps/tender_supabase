@@ -27,6 +27,7 @@ import { Status, Tender } from '@/types/tender'
 import { MasterDocumentDossierModal } from '@/components/modals/MasterDocumentDossierModal'
 import { AllDocumentsSummaryModal } from '@/components/modals/AllDocumentsSummaryModal'
 import { collectAllTenderDocuments } from '@/lib/document-ready-collector'
+import { TenderNumberBadge } from '@/components/ui/TenderNumberBadge'
 
 function statusTone(status: Status) {
   switch (status) {
@@ -289,11 +290,19 @@ export default function DocumentReadyPage() {
                       {/* 2. Tender Details */}
                       <td>
                         <div className="tender-name min-w-[170px] max-w-[240px]">
-                          <strong className="block text-slate-900 truncate" title={t.title}>
+                          <div className="mb-1 flex items-center gap-1.5 flex-wrap">
+                            <TenderNumberBadge id={t.id} />
+                            {t.value && (
+                              <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200/80">
+                                {t.value}
+                              </span>
+                            )}
+                          </div>
+                          <strong className="block text-slate-900 truncate text-xs" title={t.title}>
                             {t.title}
                           </strong>
-                          <small className="text-slate-500">
-                            {t.id} · {t.authority} {t.value ? `· ${t.value}` : ''}
+                          <small className="text-slate-500 text-[11px] block mt-0.5">
+                            {t.authority}
                           </small>
                         </div>
                       </td>
