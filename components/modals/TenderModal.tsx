@@ -696,9 +696,19 @@ export function TenderModal({
       })
 
       setExtractProgress(100)
+      const v = json.validation as { recovered: number; missing: number; scanned: boolean; fields: { label: string; status: string }[] } | null
+      const stillMissing = v ? v.fields.filter(f => f.status === 'missing').map(f => f.label) : []
       setExtractMessage({
         tone: 'ok',
-        text: `Filled ${filled} field${filled === 1 ? '' : 's'} from “${file.name}”. Document saved and associated with Tender.`,
+        text:
+          `Filled ${filled} field${filled === 1 ? '' : 's'} from “${file.name}”. Document saved and associated with Tender.` +
+          (v
+            ? ` Validation: ${v.recovered} recovered by cross-check` +
+              (stillMissing.length
+                ? `; NOT found in the tender, please fill manually: ${stillMissing.join(', ')}.`
+                : '; all required fields verified.') +
+              (v.scanned ? ' (Scanned PDF – could not cross-check text.)' : '')
+            : ''),
       })
     } catch (err) {
       if (extractTimerRef.current) clearInterval(extractTimerRef.current)
