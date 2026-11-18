@@ -1,3 +1,9 @@
+allowBuilds:
+  core-js: true
+  tesseract.js: true
+
 onlyBuiltDependencies:
   - core-js
   - tesseract.js
+
+strictDepBuilds: false

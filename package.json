@@ -4,12 +4,6 @@
   "version": "0.1.1",
   "private": true,
   "packageManager": "pnpm@12.3.4",
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "core-js",
-      "tesseract.js"
-    ]
-  },
   "scripts": {
     "predev": "node scripts/sync-pdfjs-assets.mjs",
     "dev": "next dev",
