@@ -320,12 +320,16 @@ export async function ensureDocumentIndexed(params: EnsureParams): Promise<Index
   // Embed every page that carries real text (fully unreadable pages have none)
   const hasText = (p: PageRecord) => p.method !== 'failed' || /\[(DIGITAL TEXT LAYER|OCR TEXT|VISION TRANSCRIPTION)/.test(p.content)
   const embedIdx = extract.pages.map((p, i) => (hasText(p) ? i : -1)).filter(i => i >= 0)
-  if (embedIdx.length) {
+  if (embedIdx.length && process.env.OPENAI_API_KEY) {
     try {
-      const vecs = await embedTexts(embedIdx.map(i => extract.pages[i].content), usage)
+      const embedPromise = embedTexts(embedIdx.map(i => extract.pages[i].content), usage)
+      const timeoutPromise = new Promise<number[][]>((_, reject) =>
+        setTimeout(() => reject(new Error('Embedding timeout')), 2500)
+      )
+      const vecs = await Promise.race([embedPromise, timeoutPromise])
       embedIdx.forEach((pi, k) => (embeddings[pi] = vecs[k]))
     } catch (e: any) {
-      warnings.push(`Embeddings failed (${e?.message || e}); semantic search unavailable for these pages, keyword search still used.`)
+      warnings.push(`Embeddings note (${e?.message || e}); keyword search used.`)
     }
   }
 

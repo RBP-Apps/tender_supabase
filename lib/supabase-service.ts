@@ -1096,6 +1096,43 @@ export async function fetchTendersFromSupabase(): Promise<Tender[]> {
 }
 
 // ====================================================================
+// SAFE UPSERT HELPER (Avoids PostgREST ?on_conflict=tender_id HTTP 400 errors)
+// ====================================================================
+
+async function safeUpsertByTenderId(
+  table: string,
+  payload: { tender_id: string; [key: string]: any },
+  omitKeysOnFail: string[] = []
+): Promise<{ data: any; error: any }> {
+  try {
+    const { data: existing } = await supabase
+      .from(table)
+      .select('id')
+      .eq('tender_id', payload.tender_id)
+      .maybeSingle()
+
+    const cleanPayload = { ...payload }
+    if (existing?.id) {
+      let res = await supabase.from(table).update(cleanPayload).eq('id', existing.id)
+      if (res.error && omitKeysOnFail.length > 0) {
+        for (const k of omitKeysOnFail) delete cleanPayload[k]
+        res = await supabase.from(table).update(cleanPayload).eq('id', existing.id)
+      }
+      return res
+    } else {
+      let res = await supabase.from(table).insert(cleanPayload)
+      if (res.error && omitKeysOnFail.length > 0) {
+        for (const k of omitKeysOnFail) delete cleanPayload[k]
+        res = await supabase.from(table).insert(cleanPayload)
+      }
+      return res
+    }
+  } catch (err: any) {
+    return { data: null, error: err }
+  }
+}
+
+// ====================================================================
 // TENDERS - SAVE / UPSERT COMPLETE GRAPH
 // ====================================================================
 
@@ -1259,26 +1296,14 @@ export async function saveTenderToSupabase(tender: Tender): Promise<void> {
         beneficiary_account_type: bid.beneficiaryBank?.accountType || null,
       }
 
-      let { error: bidError } = await supabase.from('tender_bid_details').upsert(
-        fullBidPayload,
-        { onConflict: 'tender_id' }
-      )
-
-      if (bidError) {
-        console.warn('Upsert tender_bid_details error, attempting safe fallback:', bidError.message)
-        const fallbackPayload = { ...fullBidPayload }
-        delete fallbackPayload.gst_section
-        delete fallbackPayload.tender_fee_plus_gst
-        delete fallbackPayload.test_report_compliance
-        delete fallbackPayload.maf_requirement
-        delete fallbackPayload.experience_requirement
-        delete fallbackPayload.turnover_requirement
-        const { error: fbErr } = await supabase.from('tender_bid_details').upsert(
-          fallbackPayload,
-          { onConflict: 'tender_id' }
-        )
-        if (fbErr) console.error('Fallback error saving bid details:', fbErr)
-      }
+      await safeUpsertByTenderId('tender_bid_details', fullBidPayload, [
+        'gst_section',
+        'tender_fee_plus_gst',
+        'test_report_compliance',
+        'maf_requirement',
+        'experience_requirement',
+        'turnover_requirement',
+      ])
 
       // Replace packages
       if (bid.packages && bid.packages.length > 0) {
@@ -1370,39 +1395,10 @@ export async function saveTenderToSupabase(tender: Tender): Promise<void> {
         ecPayload.checklist_items = ec.checklistItems
       }
       // Resilient save for stage_01_eligibility_check: handles missing UNIQUE(tender_id) or missing columns
-      try {
-        let { error: ecErr } = await supabase
-          .from('stage_01_eligibility_check')
-          .upsert(ecPayload, { onConflict: 'tender_id' })
-
-        if (ecErr) {
-          if (ecErr.message?.includes('checklist_items')) {
-            delete ecPayload.checklist_items
-          }
-          if (ecErr.message?.includes('ai_verification')) {
-            delete ecPayload.ai_verification
-          }
-          // Try select + update/insert if ON CONFLICT failed
-          const { data: existingEc } = await supabase
-            .from('stage_01_eligibility_check')
-            .select('id')
-            .eq('tender_id', tender.id)
-            .maybeSingle()
-
-          if (existingEc?.id) {
-            await supabase
-              .from('stage_01_eligibility_check')
-              .update(ecPayload)
-              .eq('id', existingEc.id)
-          } else {
-            await supabase
-              .from('stage_01_eligibility_check')
-              .insert(ecPayload)
-          }
-        }
-      } catch (ecSaveErr) {
-        console.warn('Sync stage_01_eligibility_check error:', ecSaveErr)
-      }
+      await safeUpsertByTenderId('stage_01_eligibility_check', ecPayload, [
+        'checklist_items',
+        'ai_verification',
+      ])
     }
 
     // 5. Stage 02: Sample Details
@@ -1424,35 +1420,9 @@ export async function saveTenderToSupabase(tender: Tender): Promise<void> {
         sdPayload.ai_requirements_audit = sd.aiRequirementsAudit
       }
 
-      try {
-        let { error: sdErr } = await supabase
-          .from('stage_02_sample_details')
-          .upsert(sdPayload, { onConflict: 'tender_id' })
-
-        if (sdErr) {
-          if (sdErr.message?.includes('ai_requirements_audit')) {
-            delete sdPayload.ai_requirements_audit
-          }
-          const { data: existingSd } = await supabase
-            .from('stage_02_sample_details')
-            .select('id')
-            .eq('tender_id', tender.id)
-            .maybeSingle()
-
-          if (existingSd?.id) {
-            await supabase
-              .from('stage_02_sample_details')
-              .update(sdPayload)
-              .eq('id', existingSd.id)
-          } else {
-            await supabase
-              .from('stage_02_sample_details')
-              .insert(sdPayload)
-          }
-        }
-      } catch (sdSaveErr) {
-        console.warn('Sync stage_02_sample_details error:', sdSaveErr)
-      }
+      await safeUpsertByTenderId('stage_02_sample_details', sdPayload, [
+        'ai_requirements_audit',
+      ])
     }
 
     // 6. Stage 03: EMD Ready
@@ -1493,31 +1463,28 @@ export async function saveTenderToSupabase(tender: Tender): Promise<void> {
       }
 
       // 6.2 Upsert into stage_03_emd_ready with the updated public bucket URLs
-      await supabase.from('stage_03_emd_ready').upsert(
-        {
-          tender_id: tender.id,
-          amount: emd.amount,
-          amount_source: emd.amountSource || null,
-          dept_bank_name: emd.departmentAccount?.bankName || null,
-          dept_account_holder: emd.departmentAccount?.accountHolder || null,
-          dept_account_no: emd.departmentAccount?.accountNo || null,
-          dept_ifsc: emd.departmentAccount?.ifsc || null,
-          dept_branch: emd.departmentAccount?.branch || null,
-          self_bank_name: emd.selfAccount?.bankName || null,
-          self_account_holder: emd.selfAccount?.accountHolder || null,
-          self_account_no: emd.selfAccount?.accountNo || null,
-          self_ifsc: emd.selfAccount?.ifsc || null,
-          self_branch: emd.selfAccount?.branch || null,
-          utr_number: emd.utrNumber || null,
-          payment_date: emd.date && /^\d{4}-\d{2}-\d{2}/.test(emd.date) ? emd.date.slice(0, 10) : null,
-          payment_proof_doc: emd.generatedDocument || null,
-          remarks: emd.remarks || null,
-          completed_by: emd.completedBy || null,
-          completed_at: emd.completedAt || null,
-          actual_date: emd.completedAt ? emd.completedAt.slice(0, 10) : null,
-        },
-        { onConflict: 'tender_id' }
-      )
+      await safeUpsertByTenderId('stage_03_emd_ready', {
+        tender_id: tender.id,
+        amount: emd.amount,
+        amount_source: emd.amountSource || null,
+        dept_bank_name: emd.departmentAccount?.bankName || null,
+        dept_account_holder: emd.departmentAccount?.accountHolder || null,
+        dept_account_no: emd.departmentAccount?.accountNo || null,
+        dept_ifsc: emd.departmentAccount?.ifsc || null,
+        dept_branch: emd.departmentAccount?.branch || null,
+        self_bank_name: emd.selfAccount?.bankName || null,
+        self_account_holder: emd.selfAccount?.accountHolder || null,
+        self_account_no: emd.selfAccount?.accountNo || null,
+        self_ifsc: emd.selfAccount?.ifsc || null,
+        self_branch: emd.selfAccount?.branch || null,
+        utr_number: emd.utrNumber || null,
+        payment_date: emd.date && /^\d{4}-\d{2}-\d{2}/.test(emd.date) ? emd.date.slice(0, 10) : null,
+        payment_proof_doc: emd.generatedDocument || null,
+        remarks: emd.remarks || null,
+        completed_by: emd.completedBy || null,
+        completed_at: emd.completedAt || null,
+        actual_date: emd.completedAt ? emd.completedAt.slice(0, 10) : null,
+      })
 
       // 6.2 Persist records to tender_documents_repository (delete + insert for resilience without conflict errors)
       try {
@@ -1594,17 +1561,14 @@ export async function saveTenderToSupabase(tender: Tender): Promise<void> {
     // 7. Stage 04: Document Ready
     if (tender.documentReady) {
       const dr = tender.documentReady
-      await supabase.from('stage_04_document_ready').upsert(
-        {
-          tender_id: tender.id,
-          custom_docs: dr.customDocs || [],
-          remarks: dr.remarks || null,
-          completed_by: dr.completedBy || null,
-          completed_at: dr.completedAt || null,
-          actual_date: dr.completedAt ? dr.completedAt.slice(0, 10) : null,
-        },
-        { onConflict: 'tender_id' }
-      )
+      await safeUpsertByTenderId('stage_04_document_ready', {
+        tender_id: tender.id,
+        custom_docs: dr.customDocs || [],
+        remarks: dr.remarks || null,
+        completed_by: dr.completedBy || null,
+        completed_at: dr.completedAt || null,
+        actual_date: dr.completedAt ? dr.completedAt.slice(0, 10) : null,
+      })
     }
 
     // 8. Stage 05: Portal Upload
@@ -1617,24 +1581,20 @@ export async function saveTenderToSupabase(tender: Tender): Promise<void> {
         checklistGeneratedAt: pu.checklistGeneratedAt || '',
       })
 
-      const { data: savedPu, error: puErr } = await supabase
-        .from('stage_05_portal_upload')
-        .upsert(
-          {
-            tender_id: tender.id,
-            portal_name: pu.portalName || null,
-            portal_url: pu.portalUrl || null,
-            ack_number: pu.ackNumber || null,
-            upload_date: pu.uploadDate && /^\d{4}-\d{2}-\d{2}/.test(pu.uploadDate) ? pu.uploadDate.slice(0, 10) : null,
-            remarks: remarksPayload,
-            completed_by: pu.completedBy || null,
-            completed_at: pu.completedAt || null,
-            actual_date: pu.completedAt ? pu.completedAt.slice(0, 10) : null,
-          },
-          { onConflict: 'tender_id' }
-        )
-        .select('id')
-        .single()
+      const { data: savedPu, error: puErr } = await safeUpsertByTenderId(
+        'stage_05_portal_upload',
+        {
+          tender_id: tender.id,
+          portal_name: pu.portalName || null,
+          portal_url: pu.portalUrl || null,
+          ack_number: pu.ackNumber || null,
+          upload_date: pu.uploadDate && /^\d{4}-\d{2}-\d{2}/.test(pu.uploadDate) ? pu.uploadDate.slice(0, 10) : null,
+          remarks: remarksPayload,
+          completed_by: pu.completedBy || null,
+          completed_at: pu.completedAt || null,
+          actual_date: pu.completedAt ? pu.completedAt.slice(0, 10) : null,
+        }
+      )
 
       if (!puErr && savedPu && pu.documents && pu.documents.length > 0) {
         for (const d of pu.documents) {
@@ -1706,31 +1666,28 @@ export async function saveTenderToSupabase(tender: Tender): Promise<void> {
         })
       }
 
-      await supabase.from('stage_06_submit_in_website').upsert(
-        {
-          tender_id: tender.id,
-          submission_token:
-            tenderCategory === 'Online and Offline Tender' ? 'ONLINE_AND_OFFLINE' : 'ONLINE',
-          remarks: sw.remarks || null,
-          submitted_by: sw.submittedBy || 'Admin',
-          submitted_at: isSubmitted
-            ? sw.submittedAt || new Date().toISOString()
-            : sw.submittedAt || null,
-          actual_date: isSubmitted
-            ? sw.submittedAt
-              ? sw.submittedAt.slice(0, 10)
-              : new Date().toISOString().slice(0, 10)
-            : null,
-          final_submission_receipt: {
-            tender_category: tenderCategory,
-            online_offline: tenderCategory === 'Online and Offline Tender' ? 'No' : 'Yes',
-            status: statusValue,
-            remarks: sw.remarks || '',
-            history: currentHistory,
-          },
+      await safeUpsertByTenderId('stage_06_submit_in_website', {
+        tender_id: tender.id,
+        submission_token:
+          tenderCategory === 'Online and Offline Tender' ? 'ONLINE_AND_OFFLINE' : 'ONLINE',
+        remarks: sw.remarks || null,
+        submitted_by: sw.submittedBy || 'Admin',
+        submitted_at: isSubmitted
+          ? sw.submittedAt || new Date().toISOString()
+          : sw.submittedAt || null,
+        actual_date: isSubmitted
+          ? sw.submittedAt
+            ? sw.submittedAt.slice(0, 10)
+            : new Date().toISOString().slice(0, 10)
+          : null,
+        final_submission_receipt: {
+          tender_category: tenderCategory,
+          online_offline: tenderCategory === 'Online and Offline Tender' ? 'No' : 'Yes',
+          status: statusValue,
+          remarks: sw.remarks || '',
+          history: currentHistory,
         },
-        { onConflict: 'tender_id' }
-      )
+      })
     }
 
     // 10. Stage 07: Technical Open Check (Stage 8 in workflow)
@@ -1765,33 +1722,30 @@ export async function saveTenderToSupabase(tender: Tender): Promise<void> {
         })
       }
 
-      await supabase.from('stage_07_technical_open_check').upsert(
-        {
-          tender_id: tender.id,
-          opening_date: toc.openingDate && /^\d{4}-\d{2}-\d{2}/.test(toc.openingDate) ? toc.openingDate.slice(0, 10) : null,
-          qualification_status: toc.status,
-          is_responsive: toc.status === 'Qualified',
-          remarks: toc.remarks || null,
-          committee_queries: toc.evaluationCriteria || null,
-          evaluated_by: toc.submittedBy || 'Admin',
-          evaluated_at: toc.submittedAt || nowIso,
-          actual_date: toc.completedAt ? toc.completedAt.slice(0, 10) : (toc.status === 'Qualified' ? nowIso.slice(0, 10) : null),
-          query_response_doc: {
-            openingDate: toc.openingDate,
-            openingTime: toc.openingTime,
-            openingVenueOrPortal: toc.openingVenueOrPortal,
-            openingSummary: toc.openingSummary,
-            evaluationDate: toc.evaluationDate,
-            evaluationTime: toc.evaluationTime,
-            evaluationVenue: toc.evaluationVenue,
-            evaluationCriteria: toc.evaluationCriteria,
-            complianceConditions: toc.complianceConditions,
-            remarks: toc.remarks,
-            history: currentHistory,
-          },
+      await safeUpsertByTenderId('stage_07_technical_open_check', {
+        tender_id: tender.id,
+        opening_date: toc.openingDate && /^\d{4}-\d{2}-\d{2}/.test(toc.openingDate) ? toc.openingDate.slice(0, 10) : null,
+        qualification_status: toc.status,
+        is_responsive: toc.status === 'Qualified',
+        remarks: toc.remarks || null,
+        committee_queries: toc.evaluationCriteria || null,
+        evaluated_by: toc.submittedBy || 'Admin',
+        evaluated_at: toc.submittedAt || nowIso,
+        actual_date: toc.completedAt ? toc.completedAt.slice(0, 10) : (toc.status === 'Qualified' ? nowIso.slice(0, 10) : null),
+        query_response_doc: {
+          openingDate: toc.openingDate,
+          openingTime: toc.openingTime,
+          openingVenueOrPortal: toc.openingVenueOrPortal,
+          openingSummary: toc.openingSummary,
+          evaluationDate: toc.evaluationDate,
+          evaluationTime: toc.evaluationTime,
+          evaluationVenue: toc.evaluationVenue,
+          evaluationCriteria: toc.evaluationCriteria,
+          complianceConditions: toc.complianceConditions,
+          remarks: toc.remarks,
+          history: currentHistory,
         },
-        { onConflict: 'tender_id' }
-      )
+      })
     }
 
     // 11. Stage 08: Financial Open Check (Stage 9 in workflow)
@@ -1822,51 +1776,45 @@ export async function saveTenderToSupabase(tender: Tender): Promise<void> {
         })
       }
 
-      await supabase.from('stage_08_financial_open_check').upsert(
-        {
-          tender_id: tender.id,
-          price_bid_opening_date: foc.openingDate && /^\d{4}-\d{2}-\d{2}/.test(foc.openingDate) ? foc.openingDate.slice(0, 10) : null,
-          our_rank: foc.ranking,
-          l1_bidder_name: foc.l1BidderName || null,
-          l1_bid_amount: foc.l1Price || null,
-          our_bid_amount: foc.ourBidPrice || null,
-          is_awarded: foc.ranking === 'L1',
-          final_remarks: foc.remarks || null,
-          completed_at: foc.completedAt || nowIso,
-          actual_date: foc.completedAt ? foc.completedAt.slice(0, 10) : nowIso.slice(0, 10),
-          loa_document: {
-            ranking: foc.ranking,
-            l1BidderName: foc.l1BidderName,
-            l1Price: foc.l1Price,
-            ourBidPrice: foc.ourBidPrice,
-            priceVariance: foc.priceVariance,
-            remarks: foc.remarks,
-            history: currentHistory,
-          },
+      await safeUpsertByTenderId('stage_08_financial_open_check', {
+        tender_id: tender.id,
+        price_bid_opening_date: foc.openingDate && /^\d{4}-\d{2}-\d{2}/.test(foc.openingDate) ? foc.openingDate.slice(0, 10) : null,
+        our_rank: foc.ranking,
+        l1_bidder_name: foc.l1BidderName || null,
+        l1_bid_amount: foc.l1Price || null,
+        our_bid_amount: foc.ourBidPrice || null,
+        is_awarded: foc.ranking === 'L1',
+        final_remarks: foc.remarks || null,
+        completed_at: foc.completedAt || nowIso,
+        actual_date: foc.completedAt ? foc.completedAt.slice(0, 10) : nowIso.slice(0, 10),
+        loa_document: {
+          ranking: foc.ranking,
+          l1BidderName: foc.l1BidderName,
+          l1Price: foc.l1Price,
+          ourBidPrice: foc.ourBidPrice,
+          priceVariance: foc.priceVariance,
+          remarks: foc.remarks,
+          history: currentHistory,
         },
-        { onConflict: 'tender_id' }
-      )
+      })
     }
 
     // 12. Stage 10: Negotiation
     if (tender.negotiation) {
       const neg = tender.negotiation
       try {
-        await supabase.from('stage_09_negotiation').upsert(
-          {
-            tender_id: tender.id,
-            status: neg.status,
-            letter_doc: neg.letterDoc || null,
-            negotiated_price: neg.negotiatedPrice || null,
-            meeting_date: neg.meetingDate && /^\d{4}-\d{2}-\d{2}/.test(neg.meetingDate) ? neg.meetingDate.slice(0, 10) : null,
-            remarks: neg.remarks || null,
-            submitted_by: neg.submittedBy || 'Admin',
-            submitted_at: neg.submittedAt || new Date().toISOString(),
-            actual_date: neg.completedAt ? neg.completedAt.slice(0, 10) : new Date().toISOString().slice(0, 10),
-            history: neg.history || [],
-          },
-          { onConflict: 'tender_id' }
-        )
+        await safeUpsertByTenderId('stage_09_negotiation', {
+          tender_id: tender.id,
+          status: neg.status,
+          letter_doc: neg.letterDoc || null,
+          negotiated_price: neg.negotiatedPrice || null,
+          meeting_date: neg.meetingDate && /^\d{4}-\d{2}-\d{2}/.test(neg.meetingDate) ? neg.meetingDate.slice(0, 10) : null,
+          remarks: neg.remarks || null,
+          submitted_by: neg.submittedBy || 'Admin',
+          submitted_at: neg.submittedAt || new Date().toISOString(),
+          actual_date: neg.completedAt ? neg.completedAt.slice(0, 10) : new Date().toISOString().slice(0, 10),
+          history: neg.history || [],
+        })
       } catch (negErr) {
         console.warn('stage_09_negotiation optional note:', negErr)
       }
@@ -1931,29 +1879,26 @@ export async function saveTenderToSupabase(tender: Tender): Promise<void> {
     if (tender.workOrder) {
       const wo = tender.workOrder
       try {
-        await supabase.from('stage_10_work_order').upsert(
-          {
-            tender_id: tender.id,
-            work_order_doc: wo.workOrderDoc || null,
-            work_order_number: wo.workOrderNumber || null,
-            work_order_date: wo.workOrderDate && /^\d{4}-\d{2}-\d{2}/.test(wo.workOrderDate) ? wo.workOrderDate.slice(0, 10) : null,
-            contract_value: wo.contractValue || null,
-            ai_summary: wo.aiSummary || null,
-            bg_doc: wo.bgDoc || null,
-            bg_amount: wo.bgAmount || null,
-            bg_bank_name: wo.bgBankName || null,
-            bg_number: wo.bgNumber || null,
-            bg_validity: wo.bgValidity && /^\d{4}-\d{2}-\d{2}/.test(wo.bgValidity) ? wo.bgValidity.slice(0, 10) : null,
-            affidavit_requirements: wo.affidavitRequirements || null,
-            generated_agreement: wo.generatedAgreement || null,
-            remarks: wo.remarks || null,
-            submitted_by: wo.submittedBy || 'Admin',
-            submitted_at: wo.submittedAt || new Date().toISOString(),
-            actual_date: wo.completedAt ? wo.completedAt.slice(0, 10) : new Date().toISOString().slice(0, 10),
-            history: wo.history || [],
-          },
-          { onConflict: 'tender_id' }
-        )
+        await safeUpsertByTenderId('stage_10_work_order', {
+          tender_id: tender.id,
+          work_order_doc: wo.workOrderDoc || null,
+          work_order_number: wo.workOrderNumber || null,
+          work_order_date: wo.workOrderDate && /^\d{4}-\d{2}-\d{2}/.test(wo.workOrderDate) ? wo.workOrderDate.slice(0, 10) : null,
+          contract_value: wo.contractValue || null,
+          ai_summary: wo.aiSummary || null,
+          bg_doc: wo.bgDoc || null,
+          bg_amount: wo.bgAmount || null,
+          bg_bank_name: wo.bgBankName || null,
+          bg_number: wo.bgNumber || null,
+          bg_validity: wo.bgValidity && /^\d{4}-\d{2}-\d{2}/.test(wo.bgValidity) ? wo.bgValidity.slice(0, 10) : null,
+          affidavit_requirements: wo.affidavitRequirements || null,
+          generated_agreement: wo.generatedAgreement || null,
+          remarks: wo.remarks || null,
+          submitted_by: wo.submittedBy || 'Admin',
+          submitted_at: wo.submittedAt || new Date().toISOString(),
+          actual_date: wo.completedAt ? wo.completedAt.slice(0, 10) : new Date().toISOString().slice(0, 10),
+          history: wo.history || [],
+        })
       } catch (woErr) {
         console.warn('stage_10_work_order optional note:', woErr)
       }

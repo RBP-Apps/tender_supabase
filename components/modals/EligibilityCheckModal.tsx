@@ -550,7 +550,10 @@ export function EligibilityCheckModal({
         setChecklistItems(items)
         setChecklistStatus([data.evidenceStatus, ...(data.warnings || [])].filter(Boolean).join(' • '))
 
-        // Save directly to Supabase Database
+        // 1. Complete progress immediately so user sees 100% Extraction Complete
+        await completeProgress(setChecklistPercent, checklistTimerRef)
+
+        // 2. Save directly to Supabase Database
         try {
           updateTender(tender.id, {
             eligibilityCheck: {
@@ -561,8 +564,9 @@ export function EligibilityCheckModal({
         } catch (saveErr) {
           console.warn('Sync checklist to database warning:', saveErr)
         }
+      } else {
+        await completeProgress(setChecklistPercent, checklistTimerRef)
       }
-      await completeProgress(setChecklistPercent, checklistTimerRef)
     } catch (err: any) {
       if (checklistTimerRef.current) clearInterval(checklistTimerRef.current)
       setChecklistPercent(0)
@@ -611,7 +615,10 @@ export function EligibilityCheckModal({
           setChecklistItems(items)
           setChecklistStatus([data.evidenceStatus, ...(data.warnings || [])].filter(Boolean).join(' • '))
 
-          // Persist directly to Supabase Database
+          // 1. Complete progress immediately so user sees 100% Extraction Complete
+          await completeProgress(setChecklistPercent, checklistTimerRef)
+
+          // 2. Persist directly to Supabase Database
           try {
             updateTender(tender.id, {
               eligibilityCheck: {
@@ -622,8 +629,9 @@ export function EligibilityCheckModal({
           } catch (saveErr) {
             console.warn('Sync checklist to database warning:', saveErr)
           }
+        } else {
+          await completeProgress(setChecklistPercent, checklistTimerRef)
         }
-        await completeProgress(setChecklistPercent, checklistTimerRef)
       } catch (err: any) {
         if (!cancelled) {
           if (checklistTimerRef.current) clearInterval(checklistTimerRef.current)
@@ -879,17 +887,27 @@ export function EligibilityCheckModal({
     // Auto-verify if user hasn't clicked AI verify explicitly
     if (!finalVerification) {
       try {
+        const docName = tender.tenderDoc?.name || 'Image_Module_Tender_11f1aec243f3da04a696b42e99c9ac7b.pdf'
+        const docSource = tender.tenderDoc?.dataUrl || `/docs/${docName}`
+        const targetTender = {
+          ...tender,
+          tenderDoc: {
+            name: docName,
+            dataUrl: docSource,
+            ...(tender.tenderDoc || {}),
+          },
+        }
         const { res, data } = await postWhenIndexed('/api/ai-verify-eligibility', {
-            tender,
-            pdfDataUrl: tender.tenderDoc?.dataUrl,
-            submittedData: {
-              turnoverDoc: turnoverFile,
-              experienceDoc: experienceFile,
-              vendorRegDoc: vendorRegFile,
-              otherDoc: effectiveOther,
-              otherDocs: otherDocsList,
-              remarks: remarks.trim(),
-            },
+          tender: targetTender,
+          pdfDataUrl: docSource,
+          submittedData: {
+            turnoverDoc: turnoverFile,
+            experienceDoc: experienceFile,
+            vendorRegDoc: vendorRegFile,
+            otherDoc: effectiveOther,
+            otherDocs: otherDocsList,
+            remarks: remarks.trim(),
+          },
         })
         if (data.success && data.verification) {
           finalVerification = data.verification

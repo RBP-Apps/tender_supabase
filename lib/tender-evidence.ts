@@ -98,9 +98,13 @@ export async function hybridRetrieve(params: {
   let sem: Map<string, number> | undefined
   if (indexIds.length && process.env.OPENAI_API_KEY) {
     try {
-      sem = await semanticScores(params.tenderId, indexIds, params.query, params.usage)
+      const semPromise = semanticScores(params.tenderId, indexIds, params.query, params.usage)
+      const timeoutPromise = new Promise<Map<string, number>>((_, reject) =>
+        setTimeout(() => reject(new Error('Semantic search timeout')), 1500)
+      )
+      sem = await Promise.race([semPromise, timeoutPromise])
     } catch (e: any) {
-      params.warnings?.push(`Semantic search unavailable (${e?.message || e}); keyword search only.`)
+      params.warnings?.push(`Semantic search note (${e?.message || e}); keyword search used.`)
     }
   }
   const r = retrieveContextForQuery(params.query, params.chunks, params.maxTokens ?? 25000, { semanticScores: sem })
