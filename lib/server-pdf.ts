@@ -146,11 +146,11 @@ function readPublicFile(urlPath: string): ResolvedDocBytes | null {
 
   for (const target of candidatePaths) {
     if (!target.startsWith(publicDir + path.sep)) continue
-    if (!fs.existsSync(target)) continue
+    if (!fs.existsSync(/*turbopackIgnore: true*/ target)) continue
     try {
-      const real = fs.realpathSync(target)
-      if (!real.startsWith(fs.realpathSync(publicDir) + path.sep)) continue
-      const buf = fs.readFileSync(real)
+      const real = fs.realpathSync(/*turbopackIgnore: true*/ target)
+      if (!real.startsWith(fs.realpathSync(/*turbopackIgnore: true*/ publicDir) + path.sep)) continue
+      const buf = fs.readFileSync(/*turbopackIgnore: true*/ real)
       if (buf.byteLength < 100) continue
       const ext = path.extname(real).toLowerCase()
       const mimeType =
