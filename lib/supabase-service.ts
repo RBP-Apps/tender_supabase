@@ -399,17 +399,10 @@ export async function checkSupabaseHealth(): Promise<SupabaseHealthStatus> {
     status.tables.stage_01_eligibility_check = !ecErr
     status.tables.master_company_documents = !cdErr
 
-    // Check / auto-create tender-documents storage bucket
+    // Check if tender-documents storage bucket is accessible for file uploads/downloads
     try {
-      const { data: bucket, error: bucketErr } = await supabase.storage.getBucket('tender-documents')
-      if (bucket && !bucketErr) {
-        status.tables.storageBucket = true
-      } else {
-        const { data: created, error: cErr } = await supabase.storage.createBucket('tender-documents', {
-          public: true,
-        })
-        status.tables.storageBucket = !cErr && !!created
-      }
+      const { error: storageErr } = await supabase.storage.from('tender-documents').list('', { limit: 1 })
+      status.tables.storageBucket = !storageErr
     } catch {
       status.tables.storageBucket = false
     }
@@ -558,9 +551,11 @@ export function mapDbRowToTender(row: any): Tender {
       experienceDoc: ecRow.experience_doc || null,
       vendorRegDoc: ecRow.vendor_reg_doc || null,
       otherDoc: ecRow.other_doc || null,
+      otherDocs: ecRow.other_docs || (ecRow.other_doc ? [ecRow.other_doc] : []),
       remarks: ecRow.remarks || '',
       completedAt: ecRow.completed_at || undefined,
       aiVerification: ecRow.ai_verification || undefined,
+      checklistItems: ecRow.checklist_items || undefined,
     }
   }
 
@@ -579,6 +574,7 @@ export function mapDbRowToTender(row: any): Tender {
       remarks: sdRow.remarks || '',
       completedAt: sdRow.completed_at || undefined,
       completedBy: sdRow.completed_by || undefined,
+      aiRequirementsAudit: sdRow.ai_requirements_audit || undefined,
       history: (row.sample_details_history || []).map((h: any): SampleDetailsHistoryEntry => ({
         id: h.id,
         submittedAt: h.submitted_at,
@@ -624,6 +620,7 @@ export function mapDbRowToTender(row: any): Tender {
       remarks: emdRow.remarks || '',
       completedAt: emdRow.completed_at || undefined,
       completedBy: emdRow.completed_by || undefined,
+      generatedDocument: emdRow.payment_proof_doc || undefined,
       history: (row.emd_ready_history || []).map((h: any): EmdReadyHistoryEntry => ({
         id: h.id,
         submittedAt: h.submitted_at,
@@ -636,6 +633,71 @@ export function mapDbRowToTender(row: any): Tender {
         date: h.payment_date,
         remarks: h.remarks,
       })),
+    }
+  }
+
+  // Fallback / Enhanced Restore for EMD Ready & Generated Document
+  const emdRepoDoc = (row.tender_documents_repository || []).find(
+    (d: any) => d.document_type === 'emd-data'
+  )
+  const emdPdfDoc = (row.tender_documents_repository || []).find(
+    (d: any) => d.document_type === 'emd-pdf'
+  )
+  const emdDocxDoc = (row.tender_documents_repository || []).find(
+    (d: any) => d.document_type === 'emd-docx'
+  )
+
+  if (emdRepoDoc && emdRepoDoc.file_url) {
+    try {
+      const parsedEmd = JSON.parse(emdRepoDoc.file_url)
+      if (emdReady) {
+        if (!emdReady.generatedDocument && parsedEmd.generatedDocument) {
+          emdReady.generatedDocument = parsedEmd.generatedDocument
+        }
+      } else {
+        emdReady = parsedEmd
+      }
+    } catch {}
+  }
+
+  // Restore PDF and Word URLs onto emdReady.generatedDocument if available
+  if (emdReady) {
+    if (emdPdfDoc && emdPdfDoc.file_url) {
+      if (!emdReady.generatedDocument) {
+        emdReady.generatedDocument = {
+          formatTitle: emdPdfDoc.document_title || 'EMD Format PDF Document',
+          formatSource: 'Saved Tender Format',
+          formatType: 'rtgs_neft',
+          docxFileName: emdDocxDoc?.file_name || `EMD_Document_${row.id}.docx`,
+          pdfFileName: emdPdfDoc.file_name || `EMD_Document_${row.id}.pdf`,
+          docxDataUrl: emdDocxDoc?.file_url || '',
+          pdfDataUrl: emdPdfDoc.file_url,
+          status: 'Saved',
+          version: 1,
+          generatedAt: emdPdfDoc.created_at || new Date().toISOString(),
+          lastModifiedAt: emdPdfDoc.created_at || new Date().toISOString(),
+          lastSavedAt: emdPdfDoc.created_at || new Date().toISOString(),
+          subject: `Submission of Earnest Money Deposit (EMD) for Tender: ${row.id}`,
+          addressee: emdRow?.dept_account_holder || 'The Designated Authority',
+          authorityAddress: '',
+          tenderRefNo: row.id,
+          workName: row.title || 'Tender Execution',
+          amountInWords: '',
+          declarations: [],
+          paymentTerms: [],
+          signatoryName: 'Authorized Signatory',
+          signatoryDesignation: 'Director',
+          customNotes: emdRow?.remarks || '',
+          textContent: '',
+        }
+      } else {
+        if (!emdReady.generatedDocument.pdfDataUrl) {
+          emdReady.generatedDocument.pdfDataUrl = emdPdfDoc.file_url
+        }
+        if (!emdReady.generatedDocument.docxDataUrl && emdDocxDoc?.file_url) {
+          emdReady.generatedDocument.docxDataUrl = emdDocxDoc.file_url
+        }
+      }
     }
   }
 
@@ -1295,7 +1357,8 @@ export async function saveTenderToSupabase(tender: Tender): Promise<void> {
         turnover_doc: ec.turnoverDoc || null,
         experience_doc: ec.experienceDoc || null,
         vendor_reg_doc: ec.vendorRegDoc || null,
-        other_doc: ec.otherDoc || null,
+        other_doc: ec.otherDoc || (ec.otherDocs && ec.otherDocs[0]) || null,
+        other_docs: ec.otherDocs || [],
         remarks: ec.remarks || null,
         completed_at: ec.completedAt || null,
         actual_date: ec.completedAt ? ec.completedAt.slice(0, 10) : null,
@@ -1303,41 +1366,133 @@ export async function saveTenderToSupabase(tender: Tender): Promise<void> {
       if (ec.aiVerification) {
         ecPayload.ai_verification = ec.aiVerification
       }
-      const { error: ecErr } = await supabase
-        .from('stage_01_eligibility_check')
-        .upsert(ecPayload, { onConflict: 'tender_id' })
-
-      if (ecErr && ecErr.message?.includes('ai_verification')) {
-        delete ecPayload.ai_verification
-        await supabase
+      if (ec.checklistItems) {
+        ecPayload.checklist_items = ec.checklistItems
+      }
+      // Resilient save for stage_01_eligibility_check: handles missing UNIQUE(tender_id) or missing columns
+      try {
+        let { error: ecErr } = await supabase
           .from('stage_01_eligibility_check')
           .upsert(ecPayload, { onConflict: 'tender_id' })
+
+        if (ecErr) {
+          if (ecErr.message?.includes('checklist_items')) {
+            delete ecPayload.checklist_items
+          }
+          if (ecErr.message?.includes('ai_verification')) {
+            delete ecPayload.ai_verification
+          }
+          // Try select + update/insert if ON CONFLICT failed
+          const { data: existingEc } = await supabase
+            .from('stage_01_eligibility_check')
+            .select('id')
+            .eq('tender_id', tender.id)
+            .maybeSingle()
+
+          if (existingEc?.id) {
+            await supabase
+              .from('stage_01_eligibility_check')
+              .update(ecPayload)
+              .eq('id', existingEc.id)
+          } else {
+            await supabase
+              .from('stage_01_eligibility_check')
+              .insert(ecPayload)
+          }
+        }
+      } catch (ecSaveErr) {
+        console.warn('Sync stage_01_eligibility_check error:', ecSaveErr)
       }
     }
 
     // 5. Stage 02: Sample Details
     if (tender.sampleDetails) {
       const sd = tender.sampleDetails
-      await supabase.from('stage_02_sample_details').upsert(
-        {
-          tender_id: tender.id,
-          maf_letter: (sd as any).maf_letter || sd.mafLetter || null,
-          test_report: (sd as any).test_report || sd.testReport || null,
-          bis_certificate: (sd as any).bis_certificate || sd.bisCertificate || null,
-          product_sample: (sd as any).product_sample || sd.productSample || null,
-          other_docs: sd.otherDocs || [],
-          remarks: sd.remarks || null,
-          completed_by: sd.completedBy || null,
-          completed_at: sd.completedAt || null,
-          actual_date: sd.completedAt ? sd.completedAt.slice(0, 10) : null,
-        },
-        { onConflict: 'tender_id' }
-      )
+      const sdPayload: any = {
+        tender_id: tender.id,
+        maf_letter: (sd as any).maf_letter || sd.mafLetter || null,
+        test_report: (sd as any).test_report || sd.testReport || null,
+        bis_certificate: (sd as any).bis_certificate || sd.bisCertificate || null,
+        product_sample: (sd as any).product_sample || sd.productSample || null,
+        other_docs: sd.otherDocs || [],
+        remarks: sd.remarks || null,
+        completed_by: sd.completedBy || null,
+        completed_at: sd.completedAt || null,
+        actual_date: sd.completedAt ? sd.completedAt.slice(0, 10) : null,
+      }
+      if (sd.aiRequirementsAudit) {
+        sdPayload.ai_requirements_audit = sd.aiRequirementsAudit
+      }
+
+      try {
+        let { error: sdErr } = await supabase
+          .from('stage_02_sample_details')
+          .upsert(sdPayload, { onConflict: 'tender_id' })
+
+        if (sdErr) {
+          if (sdErr.message?.includes('ai_requirements_audit')) {
+            delete sdPayload.ai_requirements_audit
+          }
+          const { data: existingSd } = await supabase
+            .from('stage_02_sample_details')
+            .select('id')
+            .eq('tender_id', tender.id)
+            .maybeSingle()
+
+          if (existingSd?.id) {
+            await supabase
+              .from('stage_02_sample_details')
+              .update(sdPayload)
+              .eq('id', existingSd.id)
+          } else {
+            await supabase
+              .from('stage_02_sample_details')
+              .insert(sdPayload)
+          }
+        }
+      } catch (sdSaveErr) {
+        console.warn('Sync stage_02_sample_details error:', sdSaveErr)
+      }
     }
 
     // 6. Stage 03: EMD Ready
     if (tender.emdReady) {
       const emd = tender.emdReady
+
+      // 6.1 Upload binary PDF & DOCX to Supabase Storage Bucket first if available
+      if (emd.generatedDocument?.pdfDataUrl && emd.generatedDocument.pdfDataUrl.startsWith('data:')) {
+        try {
+          const up = await uploadToSupabaseBucket({
+            dataUrl: emd.generatedDocument.pdfDataUrl,
+            fileName: emd.generatedDocument.pdfFileName || `EMD_Document_${tender.id}.pdf`,
+            folder: STAGE_FOLDERS.STAGE_04_EMD,
+            tenderId: tender.id,
+          })
+          if (up.storage === 'bucket' && up.url) {
+            emd.generatedDocument.pdfDataUrl = up.url
+          }
+        } catch (uploadPdfErr) {
+          console.warn('Storage bucket upload for EMD PDF note:', uploadPdfErr)
+        }
+      }
+
+      if (emd.generatedDocument?.docxDataUrl && emd.generatedDocument.docxDataUrl.startsWith('data:')) {
+        try {
+          const up = await uploadToSupabaseBucket({
+            dataUrl: emd.generatedDocument.docxDataUrl,
+            fileName: emd.generatedDocument.docxFileName || `EMD_Document_${tender.id}.docx`,
+            folder: STAGE_FOLDERS.STAGE_04_EMD,
+            tenderId: tender.id,
+          })
+          if (up.storage === 'bucket' && up.url) {
+            emd.generatedDocument.docxDataUrl = up.url
+          }
+        } catch (uploadDocxErr) {
+          console.warn('Storage bucket upload for EMD DOCX note:', uploadDocxErr)
+        }
+      }
+
+      // 6.2 Upsert into stage_03_emd_ready with the updated public bucket URLs
       await supabase.from('stage_03_emd_ready').upsert(
         {
           tender_id: tender.id,
@@ -1355,6 +1510,7 @@ export async function saveTenderToSupabase(tender: Tender): Promise<void> {
           self_branch: emd.selfAccount?.branch || null,
           utr_number: emd.utrNumber || null,
           payment_date: emd.date && /^\d{4}-\d{2}-\d{2}/.test(emd.date) ? emd.date.slice(0, 10) : null,
+          payment_proof_doc: emd.generatedDocument || null,
           remarks: emd.remarks || null,
           completed_by: emd.completedBy || null,
           completed_at: emd.completedAt || null,
@@ -1362,6 +1518,77 @@ export async function saveTenderToSupabase(tender: Tender): Promise<void> {
         },
         { onConflict: 'tender_id' }
       )
+
+      // 6.2 Persist records to tender_documents_repository (delete + insert for resilience without conflict errors)
+      try {
+        await supabase
+          .from('tender_documents_repository')
+          .delete()
+          .eq('tender_id', tender.id)
+          .in('document_type', ['emd-data', 'emd-docx', 'emd-pdf'])
+
+        const repoInserts: any[] = []
+
+        if (emd.generatedDocument?.pdfDataUrl) {
+          repoInserts.push({
+            tender_id: tender.id,
+            stage_origin: 'EMD Ready',
+            document_type: 'emd-pdf',
+            document_title: emd.generatedDocument.formatTitle || 'EMD PDF Document',
+            file_name: emd.generatedDocument.pdfFileName || `EMD_Document_${tender.id}.pdf`,
+            storage_path: `tenders/${tender.id}/emd_ready/${emd.generatedDocument.pdfFileName || 'emd_document.pdf'}`,
+            file_url: emd.generatedDocument.pdfDataUrl,
+            mime_type: 'application/pdf',
+            source: 'system-generated',
+            uploaded_by: emd.completedBy || 'Bid Manager',
+          })
+        }
+
+        if (emd.generatedDocument?.docxDataUrl) {
+          repoInserts.push({
+            tender_id: tender.id,
+            stage_origin: 'EMD Ready',
+            document_type: 'emd-docx',
+            document_title: emd.generatedDocument.formatTitle || 'EMD Word Document',
+            file_name: emd.generatedDocument.docxFileName || `EMD_Document_${tender.id}.docx`,
+            storage_path: `tenders/${tender.id}/emd_ready/${emd.generatedDocument.docxFileName || 'emd_document.docx'}`,
+            file_url: emd.generatedDocument.docxDataUrl,
+            mime_type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            source: 'system-generated',
+            uploaded_by: emd.completedBy || 'Bid Manager',
+          })
+        }
+
+        repoInserts.push({
+          tender_id: tender.id,
+          stage_origin: 'EMD Ready',
+          document_type: 'emd-data',
+          document_title: 'EMD Stage State & Generated Document',
+          file_name: 'emd-ready-data.json',
+          storage_path: `tenders/${tender.id}/emd_ready/emd-ready-data.json`,
+          file_url: JSON.stringify({
+            amount: emd.amount,
+            amountSource: emd.amountSource,
+            utrNumber: emd.utrNumber,
+            date: emd.date,
+            departmentAccount: emd.departmentAccount,
+            selfAccount: emd.selfAccount,
+            remarks: emd.remarks,
+            completedAt: emd.completedAt,
+            completedBy: emd.completedBy,
+            generatedDocument: emd.generatedDocument,
+          }),
+          mime_type: 'application/json',
+          source: 'system-snapshot',
+          uploaded_by: emd.completedBy || 'Bid Manager',
+        })
+
+        if (repoInserts.length > 0) {
+          await supabase.from('tender_documents_repository').insert(repoInserts)
+        }
+      } catch (repoErr) {
+        console.warn('EMD tender_documents_repository sync note:', repoErr)
+      }
     }
 
     // 7. Stage 04: Document Ready

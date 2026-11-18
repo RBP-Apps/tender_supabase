@@ -103,15 +103,85 @@ export function Sidebar({
       <aside className={`sidebar ${isActuallyCollapsed ? 'sidebar-collapsed' : ''} ${mobileOpen ? 'sidebar-open' : ''}`}>
         {/* 1. FIXED HEADER - Does NOT scroll */}
         <div className="sidebar-header">
-          <Link href="/" className="brand" onClick={onCloseMobile} title="Tender FMS Workflow Hub">
-            <div className="brand-mark">
-              <FileCheck2 />
-            </div>
-            <div className="brand-text">
-              <strong>Tender FMS</strong>
-              <span>Workflow Hub</span>
-            </div>
-          </Link>
+         
+<Link
+  href="/"
+  onClick={onCloseMobile}
+  title="Tender FMS Workflow Hub"
+  style={{
+    display: "flex",
+    alignItems: "center",
+    gap: "12px",
+    width: "100%",
+    minWidth: 0,
+    textDecoration: "none",
+    padding: "8px 4px",
+    boxSizing: "border-box",
+  }}
+>
+  {/* Logo */}
+  <div
+    style={{
+      width: "88px",
+      height: "42px",
+      flexShrink: 0,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      overflow: "hidden",
+    }}
+  >
+    <img
+      src="/Logo.PNG"
+      alt="RBP Logo"
+      style={{
+        width: "100%",
+        height: "100%",
+        objectFit: "contain",
+        display: "block",
+      }}
+    />
+  </div>
+
+  {/* Brand Text */}
+  <div
+    style={{
+      display: "flex",
+      flexDirection: "column",
+      justifyContent: "center",
+      flex: 1,
+      minWidth: 0,
+      gap: "3px",
+    }}
+  >
+    <strong
+      style={{
+        fontSize: "17px",
+        fontWeight: 700,
+        color: "#FFFFFF",
+        lineHeight: "22px",
+        whiteSpace: "nowrap",
+        letterSpacing: "-0.4px",
+      }}
+    >
+      Tender FMS
+    </strong>
+
+    <span
+      style={{
+        fontSize: "12px",
+        fontWeight: 700,
+        color: "#60A5FA",
+        letterSpacing: "1.8px",
+        lineHeight: "16px",
+        textTransform: "uppercase",
+      }}
+    >
+      Workflow Hub
+    </span>
+  </div>
+</Link>
+
 
           <div className="sidebar-header-actions">
             <button

@@ -12,6 +12,8 @@ import {
   AlertCircle,
   Lock,
   User,
+  Eye,
+  EyeOff,
 } from 'lucide-react'
 import { useTenders } from '@/context/TenderContext'
 import { Sidebar } from '@/components/layout/Sidebar'
@@ -26,6 +28,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [password, setPassword] = useState('')
   const [loginError, setLoginError] = useState<string | null>(null)
   const [loginLoading, setLoginLoading] = useState(false)
+  const [showPassword, setShowPassword] = useState(false)
 
   // Load sidebar collapsed preference from sessionStorage
   useEffect(() => {
@@ -81,9 +84,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   if (!hydrated) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-900 text-blue-400 gap-3">
-        <FileCheck2 className="w-10 h-10 animate-bounce" />
-        <span className="font-semibold tracking-wide text-slate-200">Initializing Tender FMS...</span>
+      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 text-slate-600 gap-3">
+        <div className="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center shadow-md animate-pulse">
+          <FileCheck2 className="w-5 h-5 text-white" />
+        </div>
+        <div className="flex items-center gap-2 text-xs font-semibold text-slate-500">
+          <span className="w-2 h-2 rounded-full bg-blue-600 animate-ping inline-block" />
+          <span>Loading Tender FMS...</span>
+        </div>
       </div>
     )
   }
@@ -154,20 +162,36 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 </div>
               </label>
 
-              <label className="flex flex-col gap-1.5 text-xs font-semibold text-slate-700">
-                Password
-                <div className="relative">
-                  <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-3.5" />
-                  <input
-                    type="password"
-                    value={password}
-                    onChange={e => setPassword(e.target.value)}
-                    placeholder="••••••••"
-                    required
-                    className="w-full border border-slate-200 rounded-lg pl-9 pr-3 py-3 text-sm focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                  />
-                </div>
-              </label>
+            
+<label className="flex flex-col gap-1.5 text-xs font-semibold text-slate-700">
+  Password
+  <div className="relative">
+    <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-3.5" />
+
+    <input
+      type={showPassword ? 'text' : 'password'}
+      value={password}
+      onChange={e => setPassword(e.target.value)}
+      placeholder="••••••••"
+      required
+      className="w-full border border-slate-200 rounded-lg pl-9 pr-10 py-3 text-sm focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+    />
+
+    <button
+      type="button"
+      onClick={() => setShowPassword(prev => !prev)}
+      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-blue-600 transition-colors"
+      aria-label={showPassword ? 'Hide password' : 'Show password'}
+    >
+      {showPassword ? (
+        <EyeOff className="w-4 h-4" />
+      ) : (
+        <Eye className="w-4 h-4" />
+      )}
+    </button>
+  </div>
+</label>
+
 
               <button
                 type="submit"

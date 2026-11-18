@@ -21,6 +21,7 @@ interface SourceCitationCardProps {
   verification?: {
     confidence: string
     isVerified: boolean
+    status?: 'verified' | 'verified-scanned' | 'not-verified' | 'evidence-not-found' | 'extraction-incomplete'
     auditNotes?: string
     unverifiedClaims?: string[]
   }
@@ -58,21 +59,36 @@ export function SourceCitationCard({
       {/* 1. Header Bar: Verification Badge & Source Count */}
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
         <div className="flex items-center gap-1.5">
-          {verification?.isVerified !== false ? (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 font-medium border border-emerald-200 dark:border-emerald-800/60 shadow-xs">
-              <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-              Document-Verified Source
+          {verification?.status === 'evidence-not-found' ? (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium border border-slate-200 dark:border-slate-700">
+              <Info className="w-3.5 h-3.5" />
+              Evidence Not Found in Document
             </span>
-          ) : (
+          ) : verification?.status === 'extraction-incomplete' ? (
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 font-medium border border-amber-200 dark:border-amber-800/60">
               <AlertTriangle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
-              Partial Document Match
+              Extraction Incomplete – Manual Verification Required
             </span>
-          )}
+          ) : verification?.status === 'verified-scanned' ? (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-sky-50 dark:bg-sky-950/40 text-sky-800 dark:text-sky-300 font-medium border border-sky-200 dark:border-sky-800/60">
+              <ShieldCheck className="w-3.5 h-3.5 text-sky-600 dark:text-sky-400" />
+              Verified Against Machine-Read Scan – Confirm on Original Page
+            </span>
+          ) : verification?.isVerified === true ? (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 font-medium border border-emerald-200 dark:border-emerald-800/60 shadow-xs">
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+              Verified Against Original Document
+            </span>
+          ) : verification ? (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 font-medium border border-amber-200 dark:border-amber-800/60">
+              <AlertTriangle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+              Not Verified – Manual Check Required
+            </span>
+          ) : null}
 
           {totalPagesAnalyzed && totalPagesAnalyzed > 1 && (
             <span className="text-slate-500 dark:text-slate-400 font-medium text-[11px]">
-              • Scanned {totalPagesAnalyzed} pages
+              • {totalPagesAnalyzed} pages indexed
             </span>
           )}
         </div>
@@ -162,6 +178,15 @@ export function SourceCitationCard({
             </div>
           )}
         </div>
+      )}
+
+      {/* 3b. Failed verification checks (always visible so nothing is hidden) */}
+      {verification?.unverifiedClaims && verification.unverifiedClaims.length > 0 && (
+        <ul className="mt-1 pl-4 list-disc text-[11px] text-amber-800 dark:text-amber-300 space-y-0.5">
+          {verification.unverifiedClaims.map((c, i) => (
+            <li key={`uv-${i}`}>{c}</li>
+          ))}
+        </ul>
       )}
 
       {/* 4. Conflict Warning Card (if documents have divergent values) */}

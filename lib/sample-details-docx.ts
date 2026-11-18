@@ -29,16 +29,27 @@ export interface SampleFieldVerificationContent {
 }
 
 /**
- * Generates verified, read-only text content for each of the 4 sample verification fields
- * by analyzing Create New Tender and Eligibility Check records.
+ * Generates verified text content and draft templates for each of the 4 sample verification fields
+ * by analyzing Create New Tender, Eligibility Check records, and Tender PDF Requirements Audit.
  */
 export function generateSampleFieldContents(
   tender: Tender,
-  autoFetchData: AutoFetchResult | null
+  autoFetchData: AutoFetchResult | null,
+  requirementsAudit?: any
 ): Record<'mafLetter' | 'testReport' | 'bisCertificate' | 'productSample', SampleFieldVerificationContent> {
   const bid = tender.bid
   const ec = tender.eligibilityCheck
   const sd = tender.sampleDetails
+
+  const mafAudit = requirementsAudit?.mafLetter || sd?.aiRequirementsAudit?.mafLetter || tender.sampleDetails?.aiRequirementsAudit?.mafLetter
+  const testAudit = requirementsAudit?.testReport || sd?.aiRequirementsAudit?.testReport || tender.sampleDetails?.aiRequirementsAudit?.testReport
+  const bisAudit = requirementsAudit?.bisCertificate || sd?.aiRequirementsAudit?.bisCertificate || tender.sampleDetails?.aiRequirementsAudit?.bisCertificate
+  const sampleAudit = requirementsAudit?.productSample || sd?.aiRequirementsAudit?.productSample || tender.sampleDetails?.aiRequirementsAudit?.productSample
+
+  const isMafNotRequired = mafAudit?.masterStatus === 'NOT REQUIRED' || mafAudit?.status === 'Not Required'
+  const isTestNotRequired = testAudit?.masterStatus === 'NOT REQUIRED' || testAudit?.status === 'Not Required'
+  const isBisNotRequired = bisAudit?.masterStatus === 'NOT REQUIRED' || bisAudit?.status === 'Not Required'
+  const isSampleNotRequired = sampleAudit?.masterStatus === 'NOT REQUIRED' || sampleAudit?.status === 'Not Required'
 
   const components = bid?.technicalComponents || []
   const makes = autoFetchData?.detectedContext.makes.length
@@ -111,11 +122,38 @@ export function generateSampleFieldContents(
     workName ||
     'Standardization of Rates for Survey, Design, Supply, Installation & Commissioning of SPV Community Irrigation Project & Chhattisgarh Gaon Ganga Yojana with all allied works'
 
-  // Always found = true: If tender doesn't have it, AI generates the standard/dummy format!
-  const mafFound = true
-  const mafNotFoundReason = ''
+  const mafFound = isMafDocUploaded || isMafNotRequired
+  const mafNotFoundReason = isMafNotRequired
+    ? 'Manufacturer Authorization Form (MAF) is NOT REQUIRED by the tender document.'
+    : isMafDocUploaded
+    ? ''
+    : 'Official OEM Manufacturer Authorization Form has not been uploaded yet.'
 
-  const mafText = `MANUFACTURER AUTHORIZATION FORM (MAF)
+  let mafText = ''
+  if (isMafDocUploaded) {
+    mafText = `MANUFACTURER AUTHORIZATION FORM (MAF) RECORD
+Document: ${mafDoc.name}
+Upload Date: ${new Date(mafDoc.uploadedAt || Date.now()).toLocaleDateString('en-IN')}
+Source: ${mafDoc.referenceNote || 'Uploaded by Bidder'}
+
+Tender Reference: ${tenderId}
+Work: "${workName}"
+Authority: ${authorityName}
+
+Attached Document Particulars:
+• File Name: ${mafDoc.name}
+• Verified Make(s): ${mafMakesList}
+• Verification Status: Official MAF Letter Attached`
+  } else if (isMafNotRequired) {
+    mafText = `[SUBMISSION STATUS: NOT REQUIRED]
+
+As verified from the official tender document, Manufacturer Authorization Form (MAF) / OEM Undertaking is NOT mandated for Tender No. ${tenderId}.
+
+Tender Reference: ${tenderId}
+Authority: ${authorityName}
+Scope of Work: "${workScope}"`
+  } else {
+    mafText = `MANUFACTURER AUTHORIZATION FORM (MAF)
 (To be issued on the Manufacturer’s Letterhead)
 
 Date: ____________________
@@ -151,6 +189,7 @@ Email ID: ______________________________________________
 Manufacturer’s Seal & Signature
 
 Note: This is a generic draft. The manufacturer should issue it on its own letterhead, complete the manufacturer and component details, and attach any test report/certificate specifically required for that component under the tender.`
+  }
 
   // -------------------------------------------------------------
   // 2. TEST REPORT
@@ -159,87 +198,68 @@ Note: This is a generic draft. The manufacturer should issue it on its own lette
   const isTestDocUploaded = !!testDoc
   const testStandardsList = standards.length > 0
     ? standards.join(', ')
-    : 'IS 14286, IEC 61215, IEC 61730, IS 16221, ISO 9001'
+    : 'IS 14286, IEC 61215, IEC 61730, IS 16221'
 
-  // Always found = true: If tender doesn't have it, AI generates standard/dummy laboratory test report!
-  const testReportFound = true
-  const testReportNotFoundReason = ''
+  const testReportFound = isTestDocUploaded || isTestNotRequired
+  const testReportNotFoundReason = isTestNotRequired
+    ? 'Laboratory Test Report is NOT REQUIRED by tender specifications.'
+    : isTestDocUploaded
+    ? ''
+    : 'Official laboratory test report has not been uploaded yet. Please upload an accredited test certificate.'
 
   let testText = ''
-  if (isTestDocUploaded || bid?.testReportCompliance || standards.length > 0 || components.length > 0) {
-    testText = `TYPE TEST & LABORATORY COMPLIANCE VERIFICATION REPORT
-Report Ref: TR/NABL/${tenderId}/${new Date().getFullYear()}
-Issue Date: ${currentDate}
-Accredited Testing Agency: NABL / ERDA / CPRI Accredited Independent Testing Laboratory
+  if (isTestDocUploaded) {
+    testText = `ACCREDITED LABORATORY TEST REPORT RECORD
+Document: ${testDoc.name}
+Upload Date: ${new Date(testDoc.uploadedAt || Date.now()).toLocaleDateString('en-IN')}
+Source: ${testDoc.referenceNote || 'Uploaded by Bidder'}
 
-1. Tender Reference Details:
-• Tender ID: ${tenderId}
-• RfS Reference: ${rfsNo}
-• Procuring Authority: ${authorityName}
-• Project Name: ${workName}
-• Bidder / Applicant: M/s ${COMPANY.name}
+Tender Reference: ${tenderId}
+Work: "${workName}"
+Authority: ${authorityName}
 
-2. Product & Technical Components Tested:
-${components.length > 0
-  ? components.map((c, i) => `• Component ${i + 1}: ${c.item} (Make: ${c.make || 'Rotomag'}, Standard: ${c.compliance || testStandardsList})`).join('\n')
-  : `• Equipment: ${items.length ? items.join(', ') : 'Solar Photovoltaic Water Pumping System Components'}\n• Manufacturer / Make: ${mafMakesList}`}
+Attached Document Particulars:
+• File Name: ${testDoc.name}
+• Applicable Standards: ${testStandardsList}
+• Verification Status: Document Attached for Technical Evaluation`
+  } else if (isTestNotRequired) {
+    testText = `[SUBMISSION STATUS: NOT REQUIRED]
 
-3. Applicable Standards & Test Protocol:
-The submitted units were subjected to complete type testing and compliance assessment in accordance with:
-${testStandardsList}
-${bid?.testReportCompliance ? `Tender Compliance Clause: "${bid.testReportCompliance}"\n` : ''}
-4. Summary of Test Results & Observations:
-• Visual & Mechanical Integrity Test: PASSED (No mechanical defects, structural rigidity intact).
-• Insulation Resistance Test: PASSED (Insulation resistance > 100 MΩ at 1000 V DC).
-• High Voltage Dielectric Strength Test: PASSED (No breakdown or flashover observed).
-• Performance Rating at STC (Standard Test Conditions): COMPLIANT (Rated efficiency within ±3% tolerance).
-• Thermal Cycling & Endurance Test: PASSED (Degradation less than 2.5% after endurance cycle).
-• Ingress Protection (IP) Test: PASSED (IP65 / IP67 certified for outdoor enclosure).
+As verified from the official tender document and technical scope, submission of laboratory/type test reports is NOT required for bid qualification in Tender No. ${tenderId}.
 
-5. Final Testing Verdict:
-VERDICT: PASS / FULLY COMPLIANT WITH TENDER SPECIFICATIONS
-The tested samples satisfy all statutory, functional, and performance requirements specified in the tender documents.`
+Tender Reference: ${tenderId}
+Authority: ${authorityName}
+Scope of Work: "${workName}"
+
+Note: If bidder wishes to submit voluntary accreditation credentials, attach an official NABL accredited laboratory test certificate.`
   } else {
-    // Standard Dummy Template Format for Type Test Report
-    testText = `TYPE TEST & LABORATORY ACCREDITATION COMPLIANCE REPORT
-Report Number: TR/LAB/${tenderId}/${new Date().getFullYear()}
-Testing Date: ${currentDate}
-Testing Laboratory: NABL / ERDA / CPRI Accredited Testing Laboratory (Govt. Approved)
+    // Draft template strictly complying with Master Prompt (Never faking test results)
+    testText = `[DRAFT TECHNICAL COMPLIANCE UNDERTAKING - NOT AN OFFICIAL LABORATORY TEST REPORT]
+(To be issued on Bidder's Letterhead pending submission of official NABL test report)
+
+Date: ${currentDate}
 
 To:
-${bid?.addresseeDesignation || 'Tender Evaluation Committee / Executive Engineer'},
+${bid?.addresseeDesignation || 'The Executive Engineer / Tender Evaluation Committee'},
 ${authorityName},
 ${authorityAddress}
 
-Subject: Technical Test & Quality Compliance Report for Tender: ${tenderId}
+Subject: Technical Compliance Undertaking for Tender No. ${tenderId}
 Project / Work: "${workName}"
 
-1. Test Sample & Applicant Particulars:
-• Applicant / Bidder: M/s ${COMPANY.name}
-• Equipment / Item Tested: ${workName} (Solar Pumps, PMSM Motors & Drive Units)
-• Manufacturer / Make: ${COMPANY.name} / Rotomag
-• Sample Batch / Serial: SMPL-${tenderId}-01
+We, M/s ${COMPANY.name}, hereby declare and confirm that the equipment and components proposed for supply under Tender No. ${tenderId} conform to the technical specifications and standards mandated in the tender documents (${testStandardsList}).
 
-2. Standard Compliance & Specifications:
-• Tested Against Standards: ${testStandardsList}
-• Test Protocol: Full Type Testing per Bureau of Indian Standards & IEC Codes
-• Operating Conditions: Ambient -5°C to +55°C, Outdoor Solar Duty
+PARTICULARS OF ACCREDITED TEST REPORT (TO BE COMPLETED BY BIDDER):
+1. Testing Laboratory Name: [INFORMATION REQUIRED - INSERT NABL / ERDA / CPRI ACCREDITED LAB]
+2. Test Report Reference Number: [INFORMATION REQUIRED - INSERT VALID TEST REPORT NUMBER]
+3. Date of Test Report: [INFORMATION REQUIRED - DD/MM/YYYY]
+4. Standards Tested: ${testStandardsList}
+${bid?.testReportCompliance ? `5. Tender Compliance Clause: "${bid.testReportCompliance}"\n` : ''}
+Note: This is a draft undertaking for tender preparation. An official test certificate issued by an accredited testing laboratory must be uploaded prior to technical evaluation.
 
-3. Summary of Laboratory Test Results:
-• Visual & Physical Examination: PASSED (No mechanical defect, finish intact per specification)
-• Dielectric / High Voltage Insulation Test: PASSED (> 100 MΩ at 1000V DC, No breakdown)
-• Power Performance & Efficiency Rating: PASSED (Efficiency conforms to specified tender curve)
-• Environmental & Endurance Cycling: PASSED (Withstands thermal, humidity, and vibration stress)
-• Ingress Protection Enclosure: PASSED (Certified IP65 / IP68 protection)
-
-4. Final Certification & Verdict:
-VERDICT: TEST PASSED / COMPLIANT WITH TENDER SPECIFICATIONS
-It is certified that the proposed equipment meets all performance, safety, and operational standards mandated in the tender documents.
-
-Authorized Laboratory Signatory:
-Quality Assurance & Testing Lead
-Independent NABL Accredited Laboratory
-[Official Laboratory Seal]`
+Authorized Signatory:
+M/s ${COMPANY.name}
+[Official Seal & Signature]`
   }
 
   // -------------------------------------------------------------
@@ -247,73 +267,132 @@ Independent NABL Accredited Laboratory
   // -------------------------------------------------------------
   const bisDoc = sd?.bisCertificate || autoFetchData?.bisCertificate
   const isBisDocUploaded = !!bisDoc
-  const bisFound = true
-  const bisNotFoundReason = ''
 
-  const bisStandardRef = standards.length > 0 ? standards[0] : 'IS 14286 / IEC 61215 / IS 16221'
-  const bisText = `BUREAU OF INDIAN STANDARDS (BIS) COMPLIANCE SUMMARY
-Registration / License Ref: BIS/CRS/${tenderId.slice(-6)}/REG-2026
-Standard Mark Authority: Bureau of Indian Standards (Govt. of India)
-Verification Status: ACTIVE & VALID FOR TENDER PARTICIPATION
+  const bisFound = isBisDocUploaded || isBisNotRequired
+  const bisNotFoundReason = isBisNotRequired
+    ? 'BIS / CRS Certificate is NOT REQUIRED by tender specifications.'
+    : isBisDocUploaded
+    ? ''
+    : 'Official BIS Registration Certificate / CRS License has not been uploaded yet.'
 
-1. Identification & Licensee:
-• Licensee / Manufacturer: M/s ${COMPANY.name}
-• Factory / Plant Location: ${COMPANY.address}
-• CIN: ${COMPANY.cin}
-• GST / PAN: ${COMPANY.pan}
+  const bisStandardRef = standards.length > 0 ? standards[0] : 'IS 14286 / IS 16221'
+  let bisText = ''
+  if (isBisDocUploaded) {
+    bisText = `BUREAU OF INDIAN STANDARDS (BIS) CERTIFICATE RECORD
+Document: ${bisDoc.name}
+Upload Date: ${new Date(bisDoc.uploadedAt || Date.now()).toLocaleDateString('en-IN')}
+Source: ${bisDoc.referenceNote || 'Uploaded by Bidder'}
 
-2. Product Scope Covered Under BIS / CRS:
-• Product Category: ${items.length ? items.join(', ') : 'Solar Photovoltaic Inverters, Water Pumping Systems & PV Modules'}
-• Governing Indian Standard: ${bisStandardRef}
-• Models Covered: High-Efficiency Solar Pumps, PMSM Motors, and MPPT Drive Controllers
-• Brand / Trademark: ROTOMAG
+Tender Reference: ${tenderId}
+Work: "${workName}"
+Authority: ${authorityName}
 
-3. Compliance with Government Directives:
-• Ministry of New & Renewable Energy (MNRE) ALMM List: Compliant and Approved.
-• Compulsory Registration Scheme (CRS): Registered under MeitY / BIS Order.
-• Standard Test Standards: Fully conforms to safety, construction, and reliability norms under ${bisStandardRef}.
+Attached Document Particulars:
+• File Name: ${bisDoc.name}
+• Governing Standard: ${bisStandardRef}
+• Verification Status: Official BIS Document Attached`
+  } else if (isBisNotRequired) {
+    bisText = `[SUBMISSION STATUS: NOT REQUIRED]
 
-4. Project Linkage:
-This BIS certification covers the components proposed for supply under Tender ID: ${tenderId} (${authorityName}) for the work "${workName}".`
+As verified from the official tender document, submission of a separate BIS or CRS certificate is NOT mandated for Tender No. ${tenderId}.
+
+Tender Reference: ${tenderId}
+Authority: ${authorityName}
+Scope of Work: "${workName}"`
+  } else {
+    bisText = `[DRAFT DECLARATION OF BIS COMPLIANCE - NOT AN OFFICIAL BIS CERTIFICATE]
+(To be issued on Bidder's Letterhead pending upload of official BIS license copy)
+
+Date: ${currentDate}
+
+To:
+${bid?.addresseeDesignation || 'The Executive Engineer / Tender Evaluation Committee'},
+${authorityName},
+${authorityAddress}
+
+Subject: Declaration of BIS / CRS Statutory Compliance for Tender No. ${tenderId}
+Project / Work: "${workName}"
+
+We, M/s ${COMPANY.name}, hereby declare that the components proposed for supply under Tender ID: ${tenderId} comply with the governing Indian Standards (${bisStandardRef}).
+
+PARTICULARS OF BIS / CRS REGISTRATION (TO BE COMPLETED BY BIDDER):
+1. BIS / CRS License Number: [INFORMATION REQUIRED - ENTER OFFICIAL BIS REGISTRATION NUMBER]
+2. Valid Upto: [INFORMATION REQUIRED - DD/MM/YYYY]
+3. Standard Mark Authority: Bureau of Indian Standards (Govt. of India)
+4. Licensee / OEM Name: [INFORMATION REQUIRED - MANUFACTURER NAME]
+
+Note: This is a draft declaration. An official Bureau of Indian Standards (BIS) Certificate or CRS license copy must be uploaded by the bidder.
+
+Authorized Signatory:
+M/s ${COMPANY.name}
+[Official Seal & Signature]`
+  }
 
   // -------------------------------------------------------------
   // 4. PRODUCT SAMPLE
   // -------------------------------------------------------------
   const sampleDoc = sd?.productSample || autoFetchData?.productSample
   const isSampleDocUploaded = !!sampleDoc
-  const sampleFound = true
-  const sampleNotFoundReason = ''
 
-  const sampleText = `PRODUCT SAMPLE SUBMISSION & PHYSICAL INSPECTION CHALLAN
-Challan Ref: CHL/SMPL/${tenderId}/${new Date().getFullYear()}
-Date of Dispatch / Submission: ${currentDate}
-Mode of Delivery: Hand Delivery / Registered Speed Post / Express Courier
+  const sampleFound = isSampleDocUploaded || isSampleNotRequired
+  const sampleNotFoundReason = isSampleNotRequired
+    ? 'Physical Product Sample submission is NOT REQUIRED for this tender scope.'
+    : isSampleDocUploaded
+    ? ''
+    : 'Sample submission receipt / delivery challan has not been uploaded yet.'
 
-1. Recipient / Testing Division:
+  let sampleText = ''
+  if (isSampleDocUploaded) {
+    sampleText = `PRODUCT SAMPLE SUBMISSION RECORD
+Document: ${sampleDoc.name}
+Upload Date: ${new Date(sampleDoc.uploadedAt || Date.now()).toLocaleDateString('en-IN')}
+Source: ${sampleDoc.referenceNote || 'Uploaded Delivery Receipt'}
+
+Tender Reference: ${tenderId}
+Work: "${workName}"
+Authority: ${authorityName}
+
+Attached Submission Particulars:
+• File Name: ${sampleDoc.name}
+• Verification Status: Sample Submission Receipt Uploaded`
+  } else if (isSampleNotRequired) {
+    sampleText = `[SUBMISSION STATUS: NOT REQUIRED]
+
+As verified from the official tender document, physical product sample submission prior to bid evaluation is NOT required for Tender No. ${tenderId}.
+
+Tender Reference: ${tenderId}
+Authority: ${authorityName}
+Scope of Work: "${workName}"`
+  } else {
+    sampleText = `[DRAFT SAMPLE SUBMISSION CHALLAN - AWAITING PHYSICAL DELIVERY]
+(To accompany physical prototype units dispatched to the testing cell)
+
+Challan Date: ${currentDate}
+
 To:
 ${bid?.addresseeDesignation || 'Officer-in-Charge, Sample Testing Cell'},
 ${authorityName},
 ${authorityAddress}
 
-2. Tender Reference:
-• Tender ID: ${tenderId}
-• RfS Reference: ${rfsNo}
-• Work Name: ${workName}
-• Submitting Bidder: M/s ${COMPANY.name}
+Subject: Submission of Physical Product Sample(s) for Tender No. ${tenderId}
+Work: "${workName}"
+Submitting Bidder: M/s ${COMPANY.name}
 
-3. Particulars of Sample Units Submitted:
+PARTICULARS OF SAMPLE DISPATCH (TO BE COMPLETED UPON DISPATCH):
+1. Mode of Delivery: [INFORMATION REQUIRED - HAND DELIVERY / SPEED POST / COURIER]
+2. Consignment / Docket Number: [INFORMATION REQUIRED - ENTER TRACKING NUMBER]
+3. Date of Dispatch: [INFORMATION REQUIRED]
+4. Particulars of Sample Units Dispatched:
 ${components.length > 0
-  ? components.map((c, i) => `• Sample Item ${i + 1}: 1 Unit of ${c.item} (Make: ${c.make || 'Rotomag'}, Spec: ${c.compliance || 'Standard'})`).join('\n')
-  : `• Sample Item 1: Complete Prototype Unit of Solar Motor / Pump Set (Make: ${mafMakesList})\n• Sample Item 2: Technical Datasheet, Operation Manual, and Routine Test Certificate`}
+  ? components.map((c, i) => `• Sample ${i + 1}: 1 Unit of ${c.item} (Make: ${c.make || 'As Quoted'})`).join('\n')
+  : `• Sample 1: Physical Prototype Unit`}
 
-4. Physical Condition & Packaging Checklist:
-• Sealed Outer Packaging: Intact and tamper-evident sealed with company security hologram.
-• Identification Markings: Labeled clearly with Tender ID (${tenderId}), Bidder Name, and Item Serial Numbers.
-• Accompanying Paperwork: Test report copy, manufacturer test certificate, and dispatch note enclosed.
-• Courier / Hand Receipt Ref: ACK-${tenderId}-SMPL-01
-
-5. Acknowledgment of Receipt:
-Received the above physical samples in sealed and acceptable condition for technical inspection and laboratory evaluation against Tender No. ${tenderId}.`
+RECEIPT ACKNOWLEDGMENT (FOR USE BY TESTING CELL ONLY):
+Received Date: [PENDING RECEIPT AT TESTING CELL]
+Received By: [NAME & DESIGNATION OF TESTING OFFICER]
+Condition of Package: [SEALED / INTACT]
+Testing Cell Acknowledgment Stamp & Signature`
+  }
 
   return {
     mafLetter: {
@@ -327,10 +406,10 @@ Received the above physical samples in sealed and acceptable condition for techn
       sourceDocumentName: mafDoc?.name,
       sourceOrigin: mafDoc?.referenceNote || (isMafDocUploaded ? 'Uploaded Document' : 'Generic MAF Draft (RBP Pattern)'),
       attributes: [
-        { label: 'Format Type', value: 'Generic MAF Draft (Letterhead)' },
+        { label: 'Format Type', value: isMafDocUploaded ? 'Uploaded MAF' : 'Generic MAF Draft (Letterhead)' },
         { label: 'Authorized Bidder', value: 'RBP Energy (India) Pvt. Ltd.' },
         { label: 'Tendering Authority', value: authorityShort },
-        { label: 'Tender Ref', value: tenderId },
+        { label: 'Status', value: isMafDocUploaded ? 'Uploaded & Verified' : 'Awaiting OEM Letterhead' },
       ],
     },
     testReport: {
@@ -342,12 +421,12 @@ Received the above physical samples in sealed and acceptable condition for techn
       notFoundReason: testReportNotFoundReason,
       textContent: testText,
       sourceDocumentName: testDoc?.name,
-      sourceOrigin: testDoc?.referenceNote || (isTestDocUploaded ? 'Uploaded Document' : 'AI Generated Laboratory Report'),
+      sourceOrigin: testDoc?.referenceNote || (isTestDocUploaded ? 'Uploaded Document' : isTestNotRequired ? 'Tender Scope (Not Required)' : 'Draft Undertaking Template'),
       attributes: [
-        { label: 'Format Type', value: isTestDocUploaded ? 'Uploaded / Linked' : 'AI Standard Test Report' },
+        { label: 'Tender Requirement', value: isTestNotRequired ? 'NOT REQUIRED' : 'MANDATORY' },
+        { label: 'Report Status', value: isTestDocUploaded ? 'Uploaded & Verified' : isTestNotRequired ? 'Safe to Skip' : 'Pending Upload by Bidder' },
         { label: 'Testing Standard', value: testStandardsList },
-        { label: 'Accreditation', value: 'NABL / ERDA / CPRI' },
-        { label: 'Verdict', value: 'PASS / Compliant' },
+        { label: 'Accreditation Body', value: 'NABL / ERDA / CPRI' },
       ],
     },
     bisCertificate: {
@@ -359,12 +438,12 @@ Received the above physical samples in sealed and acceptable condition for techn
       notFoundReason: bisNotFoundReason,
       textContent: bisText,
       sourceDocumentName: bisDoc?.name,
-      sourceOrigin: bisDoc?.referenceNote || 'Tender Technical Scope',
+      sourceOrigin: bisDoc?.referenceNote || (isBisDocUploaded ? 'Uploaded Document' : isBisNotRequired ? 'Tender Scope (Not Required)' : 'Draft Declaration Template'),
       attributes: [
+        { label: 'Tender Requirement', value: isBisNotRequired ? 'NOT REQUIRED' : 'MANDATORY' },
+        { label: 'License Status', value: isBisDocUploaded ? 'Uploaded & Verified' : isBisNotRequired ? 'Safe to Skip' : 'Pending Upload by Bidder' },
         { label: 'Standard Mark', value: bisStandardRef },
-        { label: 'Licensee', value: COMPANY.name },
-        { label: 'Validity Status', value: 'Active / Good Standing' },
-        { label: 'ALMM / CRS', value: 'Approved & Compliant' },
+        { label: 'Registration Scheme', value: 'BIS / CRS' },
       ],
     },
     productSample: {
@@ -376,12 +455,11 @@ Received the above physical samples in sealed and acceptable condition for techn
       notFoundReason: sampleNotFoundReason,
       textContent: sampleText,
       sourceDocumentName: sampleDoc?.name,
-      sourceOrigin: sampleDoc?.referenceNote || 'Sample Submission Challan',
+      sourceOrigin: sampleDoc?.referenceNote || (isSampleDocUploaded ? 'Uploaded Receipt' : isSampleNotRequired ? 'Tender Scope (Not Required)' : 'Draft Challan Template'),
       attributes: [
-        { label: 'Delivery Mode', value: 'Hand Delivery / Express Courier' },
-        { label: 'Packaging Seal', value: 'Tamper-Evident Sealed' },
+        { label: 'Tender Requirement', value: isSampleNotRequired ? 'NOT REQUIRED' : 'MANDATORY' },
+        { label: 'Physical Submission', value: isSampleDocUploaded ? 'Receipt Uploaded' : isSampleNotRequired ? 'No Sample Required' : 'Pending Physical Delivery' },
         { label: 'Consignee', value: authorityName },
-        { label: 'Sample Status', value: 'Submitted for Inspection' },
       ],
     },
   }

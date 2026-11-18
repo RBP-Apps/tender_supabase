@@ -30,6 +30,12 @@ import {
   getSessionUserId,
   setSessionUserId,
   clearSessionUser,
+  getSessionUser,
+  setSessionUser,
+  getCachedTenders,
+  setCachedTenders,
+  getCachedMasters,
+  setCachedMasters,
   ALL_PAGE_PATHS,
 } from '@/lib/user-service'
 import { hashPassword, verifyPassword, encodeStoredPassword } from '@/lib/auth-crypto'
@@ -86,9 +92,9 @@ export const stagesList: { label: Stage; path: string; short: string }[] = [
 
 const TenderContext = createContext<TenderContextType | undefined>(undefined)
 
-// LocalStorage completely disabled: Database (Supabase) is the single source of truth
+// Pure Supabase Database Persistence: Database is the single source of truth
 function syncToLocalStorage(_data?: any) {
-  // No-op: zero localStorage persistence
+  // No-op: zero localStorage persistence for master tenders
 }
 
 const COMPANY_DOCS_STORAGE_KEY = 'tender_fms_company_docs_vault'
@@ -142,8 +148,29 @@ export function TenderProvider({ children }: { children: React.ReactNode }) {
     return health
   }, [])
 
-  // 1. Thoroughly wipe all legacy LocalStorage data caches on client load (exempting companyDocs vault)
+  // 1. Instant client hydration on mount: restore session user & cached data immediately (0ms delay on refresh)
   useEffect(() => {
+    try {
+      const savedUser = getSessionUser()
+      if (savedUser && savedUser.isActive) {
+        setCurrentUser(savedUser)
+        setLoggedIn(true)
+      }
+      const cachedT = getCachedTenders()
+      if (Array.isArray(cachedT) && cachedT.length > 0) {
+        setTenders(cachedT)
+      }
+      const cachedM = getCachedMasters()
+      if (cachedM) {
+        setMasters(cachedM)
+      }
+    } catch (e) {
+      console.warn('Instant session hydration notice:', e)
+    } finally {
+      // Hydrate client immediately on mount so AppShell never hangs on "Initializing Tender FMS..."
+      setHydrated(true)
+    }
+
     clearAllLocalApplicationStorage()
     const local = loadLocalCompanyDocs()
     if (local && Object.keys(local).length > 0) {
@@ -156,12 +183,20 @@ export function TenderProvider({ children }: { children: React.ReactNode }) {
     try {
       setLoading(true)
 
-      // Test connection
-      const health = await checkSupabaseHealth()
-      setSupabaseHealth(health)
-      setSupabaseConnected(health.connected)
-
-      const [dbTenders, dbMasters, dbAccounts, dbCompanyDocs, dbUsers] = await Promise.all([
+      // Run health check and data queries in PARALLEL to eliminate sequential network lag
+      const [health, dbTenders, dbMasters, dbAccounts, dbCompanyDocs, dbUsers] = await Promise.all([
+        checkSupabaseHealth().catch(() => ({
+          connected: false,
+          url: '',
+          tendersCount: 0,
+          tables: {
+            tenders: false,
+            master_categories: false,
+            master_bank_accounts: false,
+            stage_01_eligibility_check: false,
+            storageBucket: false,
+          },
+        })),
         fetchTendersFromSupabase().catch(err => {
           console.warn('Supabase fetch tenders error caught in refresh:', err)
           return null
@@ -172,7 +207,15 @@ export function TenderProvider({ children }: { children: React.ReactNode }) {
         fetchUsersFromSupabase().catch(() => []),
       ])
 
-      if (dbMasters) setMasters(dbMasters)
+      if (health) {
+        setSupabaseHealth(health)
+        setSupabaseConnected(health.connected)
+      }
+
+      if (dbMasters) {
+        setMasters(dbMasters)
+        setCachedMasters(dbMasters)
+      }
       if (Array.isArray(dbAccounts)) setSelfAccounts(dbAccounts)
 
       if (dbCompanyDocs && Object.keys(dbCompanyDocs).length > 0) {
@@ -193,11 +236,13 @@ export function TenderProvider({ children }: { children: React.ReactNode }) {
         setUsers(dbUsers)
 
         // Session re-validation directly from Supabase
-        const sessionUserId = getSessionUserId()
+        const sessionUser = getSessionUser()
+        const sessionUserId = sessionUser?.id || getSessionUserId()
         if (sessionUserId) {
           const matchedUser = dbUsers.find(u => u.id === sessionUserId && u.isActive)
           if (matchedUser) {
             setCurrentUser(matchedUser)
+            setSessionUser(matchedUser)
             setLoggedIn(true)
           } else {
             clearSessionUser()
@@ -209,6 +254,7 @@ export function TenderProvider({ children }: { children: React.ReactNode }) {
 
       if (Array.isArray(dbTenders)) {
         setTenders(dbTenders)
+        setCachedTenders(dbTenders)
       } else {
         console.warn('Supabase tenders fetch returned null.')
       }
@@ -309,6 +355,7 @@ export function TenderProvider({ children }: { children: React.ReactNode }) {
 
       const authUser = authResult.user
       setCurrentUser(authUser)
+      setSessionUser(authUser)
       setSessionUserId(authUser.id)
       setLoggedIn(true)
       notify(`Welcome back, ${authUser.username}! (${authUser.role})`)

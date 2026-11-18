@@ -11,6 +11,22 @@ export interface UniversalParseOptions {
   maxPages?: number
   chunkSizeWords?: number
   enableOcr?: boolean
+  /**
+   * Optional pre-loaded pdf.js module. Server routes pass the natively loaded
+   * node_modules build (see lib/server-pdf.ts) because the bundled build can
+   * fail inside Next.js server bundles.
+   */
+  pdfjsLib?: any
+  /** OCR language(s) for tesseract.js, e.g. 'eng'. */
+  ocrLang?: string
+}
+
+/** Marker prefix for pages whose text could not be extracted. */
+export const EXTRACTION_FAILED_MARKER = '[EXTRACTION FAILED'
+
+/** True when a chunk carries no real document text (unreadable / failed page). */
+export function isChunkUnreadable(content: string): boolean {
+  return content.startsWith(EXTRACTION_FAILED_MARKER)
 }
 
 /**
@@ -103,6 +119,84 @@ function extractKeywords(text: string): string[] {
 }
 
 /**
+ * Rebuild reading-order lines from a pdf.js getTextContent() result.
+ * Items are grouped by baseline (top→bottom, left→right); wide horizontal gaps
+ * become " | " so table columns stay separated. Shared by the browser parser
+ * and the server ingestion pipeline (lib/document-pipeline.ts).
+ */
+export function reconstructPageLines(textContent: any): string[] {
+  // Spatial line grouping: sort by Y descending (top to bottom), then X ascending (left to right)
+  const rawItems = (textContent.items as any[]) || []
+  const items = rawItems
+    .filter(item => typeof item.str === 'string' && item.str.length > 0)
+    .map(item => ({
+      text: item.str,
+      x: item.transform ? item.transform[4] : 0,
+      y: item.transform ? item.transform[5] : 0,
+      width: item.width || 0,
+      height: item.height || 0,
+    }))
+    .sort((a, b) => {
+      if (Math.abs(b.y - a.y) > 3) return b.y - a.y
+      return a.x - b.x
+    })
+
+  const lines: string[] = []
+  let currentY: number | null = null
+  let currentLine: typeof items = []
+
+  for (const item of items) {
+    if (currentY === null || Math.abs(currentY - item.y) > 3) {
+      if (currentLine.length > 0) {
+        // Reconstruct line with gap awareness for tables and columns
+        let lineStr = ''
+        for (let idx = 0; idx < currentLine.length; idx++) {
+          const cur = currentLine[idx]
+          if (idx > 0) {
+            const prev = currentLine[idx - 1]
+            const gap = cur.x - (prev.x + prev.width)
+            if (gap > 22) {
+              lineStr += ' | '
+            } else if (gap > 5) {
+              lineStr += ' '
+            }
+          }
+          lineStr += cur.text
+        }
+        lines.push(lineStr)
+      }
+      currentLine = [item]
+      currentY = item.y
+    } else {
+      currentLine.push(item)
+    }
+  }
+  if (currentLine.length > 0) {
+    let lineStr = ''
+    for (let idx = 0; idx < currentLine.length; idx++) {
+      const cur = currentLine[idx]
+      if (idx > 0) {
+        const prev = currentLine[idx - 1]
+        const gap = cur.x - (prev.x + prev.width)
+        if (gap > 22) {
+          lineStr += ' | '
+        } else if (gap > 5) {
+          lineStr += ' '
+        }
+      }
+      lineStr += cur.text
+    }
+    lines.push(lineStr)
+  }
+  return lines
+}
+
+/** Normalise extracted text (exported for the server pipeline). */
+export const cleanExtractedText = (text: string) => cleanText(text)
+export const detectSectionTitle = (lines: string[]) => extractSectionTitle(lines)
+export const detectKeywords = (text: string) => extractKeywords(text)
+
+/**
  * 1. UNIVERSAL PDF PARSER (Handles 200-500+ Pages)
  * Uses pdfjs-dist with page-wise extraction and spatial text reconstruction.
  */
@@ -111,7 +205,7 @@ export async function parsePdfDocument(
   fileName: string,
   options?: UniversalParseOptions
 ): Promise<ParsedDocumentResult> {
-  const { onProgress, maxPages = 600, enableOcr = true } = options || {}
+  const { onProgress, maxPages = 600, enableOcr = true, ocrLang = 'eng' } = options || {}
 
   onProgress?.({
     stage: 'extracting_content',
@@ -120,8 +214,8 @@ export async function parsePdfDocument(
     message: `Loading PDF structure for ${fileName}...`,
   })
 
-  // Dynamic import of pdfjs-dist legacy build
-  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
+  // Dynamic import of pdfjs-dist legacy build (or the injected server build)
+  const pdfjs: any = options?.pdfjsLib || (await import('pdfjs-dist/legacy/build/pdf.mjs'))
 
   // Setup worker only in browser environment if not yet configured
   if (typeof window !== 'undefined' && pdfjs.GlobalWorkerOptions && !pdfjs.GlobalWorkerOptions.workerSrc) {
@@ -154,57 +248,122 @@ export async function parsePdfDocument(
   const allPageTexts: string[] = []
   let scannedPagesCount = 0
 
+  // One tesseract worker per document. The first OCR call downloads the engine
+  // and language data, which routinely took longer than the old 7s per-page
+  // timeout, so OCR silently failed on most scanned pages.
+  let ocrWorker: any = null
+  let ocrInitFailed = false
+  const getOcrWorker = async () => {
+    if (ocrWorker || ocrInitFailed) return ocrWorker
+    try {
+      const tesseractModule = await import('tesseract.js')
+      const T = (tesseractModule as any).default || tesseractModule
+      ocrWorker = await T.createWorker(ocrLang)
+    } catch (e) {
+      console.warn('OCR engine could not be initialised:', e)
+      ocrInitFailed = true
+    }
+    return ocrWorker
+  }
+
   for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
     try {
       const page = await pdfDoc.getPage(pageNum)
       const textContent = await page.getTextContent()
 
-      // Spatial line grouping: sort by Y descending (top to bottom), then X ascending (left to right)
-      const rawItems = (textContent.items as any[]) || []
-      const items = rawItems
-        .filter(item => typeof item.str === 'string' && item.str.length > 0)
-        .map(item => ({
-          text: item.str,
-          x: item.transform ? item.transform[4] : 0,
-          y: item.transform ? item.transform[5] : 0,
-          width: item.width || 0,
-          height: item.height || 0,
-        }))
-        .sort((a, b) => {
-          if (Math.abs(b.y - a.y) > 3) return b.y - a.y
-          return a.x - b.x
-        })
-
-      const lines: string[] = []
-      let currentY: number | null = null
-      let currentLine: typeof items = []
-
-      for (const item of items) {
-        if (currentY === null || Math.abs(currentY - item.y) > 3) {
-          if (currentLine.length > 0) {
-            lines.push(currentLine.map(i => i.text).join(' '))
-          }
-          currentLine = [item]
-          currentY = item.y
-        } else {
-          currentLine.push(item)
-        }
-      }
-      if (currentLine.length > 0) {
-        lines.push(currentLine.map(i => i.text).join(' '))
-      }
+      const lines = reconstructPageLines(textContent)
 
       let pageText = cleanText(lines.join('\n'))
+      const digitalText = pageText
       let isPageScanned = false
+      let pageDataUrl: string | undefined
+      let ocrConfidence: number | undefined
 
-      // Check if page appears scanned or empty
-      if (pageText.length < 40) {
+      // Scanned-page detection. Previously ANY page with < 6 text items was treated
+      // as scanned and its real text was discarded (short annexure/title pages lost
+      // their content). Now: no text at all, or little text on a page that paints
+      // images (a scan with a small digital header/stamp).
+      const textChars = pageText.replace(/\s/g, '').length
+      let paintsImages = false
+      if (textChars > 0 && textChars < 200) {
+        try {
+          const ops = await page.getOperatorList()
+          const O = pdfjs.OPS || {}
+          const imageOps = [O.paintImageXObject, O.paintInlineImageXObject, O.paintImageMaskXObject, O.paintJpegXObject].filter(
+            (x: any) => typeof x === 'number'
+          )
+          paintsImages = ops.fnArray.some((fn: number) => imageOps.includes(fn))
+        } catch {
+          paintsImages = false
+        }
+      }
+      const appendDigital = (t: string) =>
+        digitalText && textChars > 0 ? `${t}\n[Digital text layer on this page]:\n${digitalText}` : t
+
+      if (textChars === 0 || (textChars < 200 && paintsImages)) {
         isPageScanned = true
         scannedPagesCount++
-        pageText = `[Page ${pageNum}: Scanned or image-based content]`
+
+        // In browser environments, render the scanned page to canvas at 1.5x resolution
+        if (typeof document !== 'undefined') {
+          try {
+            const viewport = page.getViewport({ scale: 1.5 })
+            const canvas = document.createElement('canvas')
+            canvas.width = Math.floor(viewport.width)
+            canvas.height = Math.floor(viewport.height)
+            const ctx = canvas.getContext('2d')
+            if (ctx) {
+              await page.render({ canvasContext: ctx, viewport }).promise
+              pageDataUrl = canvas.toDataURL('image/jpeg', 0.85)
+
+              // If OCR is enabled, execute Tesseract OCR on rendered page image
+              if (enableOcr) {
+                onProgress?.({
+                  stage: 'extracting_content',
+                  stageLabel: 'Running Page OCR',
+                  current: pageNum,
+                  total: totalPages,
+                  percent: Math.round(10 + (pageNum / totalPages) * 75),
+                  message: `OCR scanning scanned page ${pageNum} of ${totalPages}...`,
+                })
+
+                try {
+                  const worker = await getOcrWorker()
+                  if (!worker) throw new Error('OCR engine unavailable')
+                  const ocrPromise = worker.recognize(pageDataUrl)
+                  const timeoutPromise = new Promise((_, reject) =>
+                    setTimeout(() => reject(new Error('Page OCR Timeout')), 60000)
+                  )
+                  const ocrRes: any = await Promise.race([ocrPromise, timeoutPromise])
+                  const ocrClean = cleanText(ocrRes?.data?.text || '')
+                  const conf = ocrRes?.data?.confidence
+                  if (typeof conf === 'number') ocrConfidence = conf
+                  if (ocrClean.length > 25) {
+                    pageText = `[Scanned Page ${pageNum} - OCR Extracted Text${typeof conf === 'number' ? ` (OCR confidence ${Math.round(conf)}/100)` : ''}]:\n${ocrClean}`
+                  } else {
+                    pageText = appendDigital(`${EXTRACTION_FAILED_MARKER}: Page ${pageNum} is scanned and OCR returned no readable text]`)
+                  }
+                } catch (ocrErr: any) {
+                  pageText = appendDigital(`${EXTRACTION_FAILED_MARKER}: Page ${pageNum} is scanned and OCR failed (${ocrErr?.message || 'error'})]`)
+                }
+              } else {
+                pageText = appendDigital(`${EXTRACTION_FAILED_MARKER}: Page ${pageNum} is scanned/image-only and OCR is disabled]`)
+              }
+            }
+          } catch (renderErr) {
+            console.warn(`Could not render scanned page ${pageNum} to canvas:`, renderErr)
+            pageText = appendDigital(`${EXTRACTION_FAILED_MARKER}: Page ${pageNum} is scanned/image-only and could not be rendered]`)
+          }
+        } else {
+          // Server-side: no canvas available for OCR in this environment.
+          pageText = appendDigital(`${EXTRACTION_FAILED_MARKER}: Page ${pageNum} is scanned/image-only; no text layer]`)
+        }
       }
 
       const sectionTitle = extractSectionTitle(lines)
+      const clauseMatch = pageText.match(/\b(?:Clause|Section|Article|Para|Clause No\.)\s*([0-9]+(?:\.[0-9]+)*[A-Za-z]?)/i)
+      const clauseOrRef = clauseMatch ? clauseMatch[0] : undefined
+
       const hasTables =
         lines.some(l => (l.match(/\|/g) || []).length >= 2) ||
         lines.some(l => (l.match(/\s{3,}/g) || []).length >= 2)
@@ -216,9 +375,12 @@ export async function parsePdfDocument(
         pageNumber: pageNum,
         totalPages: pdfDoc.numPages,
         sectionTitle: sectionTitle || `Page ${pageNum}`,
+        clauseOrRef,
         content: pageText,
         charCount: pageText.length,
         isScanned: isPageScanned,
+        dataUrl: pageDataUrl,
+        ocrConfidence,
         hasTables,
         keywords: extractKeywords(pageText),
       }
@@ -247,25 +409,74 @@ export async function parsePdfDocument(
         pageNumber: pageNum,
         totalPages: pdfDoc.numPages,
         sectionTitle: `Page ${pageNum} (Parse Warning)`,
-        content: `[Page ${pageNum}: Text could not be read cleanly]`,
-        charCount: 40,
+        content: `${EXTRACTION_FAILED_MARKER}: Page ${pageNum} could not be parsed]`,
+        charCount: 50,
         isScanned: true,
       })
     }
   }
 
+  if (ocrWorker) {
+    try {
+      await ocrWorker.terminate()
+    } catch {}
+  }
+
+  // Pages beyond maxPages are NOT silently dropped: they are recorded as unread.
+  for (let pageNum = totalPages + 1; pageNum <= pdfDoc.numPages; pageNum++) {
+    chunks.push({
+      id: `${fileName}-page-${pageNum}`,
+      docName: fileName,
+      docType: 'pdf',
+      pageNumber: pageNum,
+      totalPages: pdfDoc.numPages,
+      sectionTitle: `Page ${pageNum}`,
+      content: `${EXTRACTION_FAILED_MARKER}: Page ${pageNum} was not read (page limit ${maxPages})]`,
+      charCount: 60,
+    })
+  }
+
+  const unreadablePages = chunks
+    .filter(c => isChunkUnreadable(c.content))
+    .map(c => c.pageNumber as number)
+
   const combinedFullText = allPageTexts.join('\n\n')
   const preview =
     combinedFullText.slice(0, 300) + (combinedFullText.length > 300 ? '...' : '')
+
+  // Build Executive Document Map
+  const documentMap: Array<{ sectionTitle: string; startPage: number; endPage?: number; clauses?: string[] }> = []
+  let currentSec: { sectionTitle: string; startPage: number; endPage?: number; clauses: string[] } | null = null
+
+  for (const c of chunks) {
+    if (c.sectionTitle && (!currentSec || currentSec.sectionTitle !== c.sectionTitle)) {
+      if (currentSec && c.pageNumber) currentSec.endPage = c.pageNumber - 1
+      currentSec = {
+        sectionTitle: c.sectionTitle,
+        startPage: c.pageNumber || 1,
+        clauses: [],
+      }
+      documentMap.push(currentSec)
+    }
+    if (c.clauseOrRef && currentSec && !currentSec.clauses.includes(c.clauseOrRef)) {
+      currentSec.clauses.push(c.clauseOrRef)
+    }
+  }
+  if (currentSec) currentSec.endPage = totalPages
+
+  const executiveSummary = `Executive Document Map of "${fileName}": Total ${pdfDoc.numPages} pages (${scannedPagesCount > 0 ? `${scannedPagesCount} scanned/OCR` : 'all digital'}). Identified ${documentMap.length} major sections across the document.`
 
   return {
     name: fileName,
     type: 'application/pdf',
     size: buffer.byteLength,
     extractedText: combinedFullText,
-    previewText: `Parsed ${chunks.length} pages (${scannedPagesCount > 0 ? `${scannedPagesCount} scanned` : 'all digital'}).`,
+    previewText: `Parsed ${pdfDoc.numPages} pages (${scannedPagesCount > 0 ? `${scannedPagesCount} scanned/OCR` : 'all digital'}${unreadablePages.length > 0 ? `, ${unreadablePages.length} UNREADABLE` : ''}).`,
+    unreadablePages,
     pageCount: pdfDoc.numPages,
     isScanned: scannedPagesCount > (totalPages / 2),
+    executiveSummary,
+    documentMap,
     chunks,
   }
 }
@@ -294,9 +505,20 @@ export async function parseExcelDocument(
   const sharedStringsXml = await zip.file('xl/sharedStrings.xml')?.async('text')
   const sharedStrings: string[] = []
   if (sharedStringsXml) {
-    const stringMatches = sharedStringsXml.match(/<t[^>]*>([^<]*)<\/t>/g) || []
-    for (const m of stringMatches) {
-      const val = m.replace(/<[^>]+>/g, '')
+    // Each <si> is ONE shared string; rich-text strings contain several <t> runs.
+    // Matching <t> elements individually shifted every later index, so cells
+    // showed other cells' values.
+    const siMatches = sharedStringsXml.match(/<si>[\s\S]*?<\/si>|<si\/>/g) || []
+    for (const si of siMatches) {
+      const runs = si.match(/<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/g) || []
+      const val = runs
+        .map(r => r.replace(/<[^>]+>/g, ''))
+        .join('')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&apos;/g, "'")
+        .replace(/&amp;/g, '&')
       sharedStrings.push(val)
     }
   }
@@ -537,16 +759,14 @@ export async function parseWordDocument(
     const headingMatch = section.match(/^#{1,3}\s+(.+)$/m)
     const sectionTitle = headingMatch ? headingMatch[1].trim() : `Section ${sIdx + 1}`
 
-    // Estimate page based on ~400 words per page
-    const wordCount = section.split(/\s+/).length
-    const pagesSpan = Math.max(1, Math.round(wordCount / 400))
-
+    // Word files have no fixed pagination: cite the section, never an
+    // estimated page number (estimated pages produced wrong citations).
     const chunk: DocumentPageChunk = {
       id: `${fileName}-section-${sIdx + 1}`,
       docName: fileName,
       docType: 'word',
-      pageNumber: pageCounter,
       sectionTitle,
+      clauseOrRef: `Section ${pageCounter}`,
       content: section,
       charCount: section.length,
       hasTables: section.includes('|'),
@@ -554,7 +774,7 @@ export async function parseWordDocument(
     }
 
     chunks.push(chunk)
-    pageCounter += pagesSpan
+    pageCounter += 1
   }
 
   return {
@@ -563,7 +783,6 @@ export async function parseWordDocument(
     size: buffer.byteLength,
     extractedText: markdownText,
     previewText: markdownText.slice(0, 300) + (markdownText.length > 300 ? '...' : ''),
-    pageCount: pageCounter - 1,
     chunks,
   }
 }

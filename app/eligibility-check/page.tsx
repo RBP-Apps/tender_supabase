@@ -26,6 +26,7 @@ import { EligibilityCheckModal } from '@/components/modals/EligibilityCheckModal
 import { TenderModal } from '@/components/modals/TenderModal'
 import { DocumentPreviewModal } from '@/components/common/DocumentPreviewModal'
 import { TenderNumberBadge } from '@/components/ui/TenderNumberBadge'
+import { indexTenderDocuments } from '@/lib/document-index-client'
 
 function statusTone(status: Status) {
   switch (status) {
@@ -200,9 +201,12 @@ function renderAiEligibilityCell(
   aiVerification?: AIEligibilityVerification,
   onViewReport?: () => void,
   onRunCheck?: () => void,
-  isRunning?: boolean
+  isRunning?: boolean,
+  tenderId?: string
 ) {
-  if (!aiVerification) {
+  const effectiveAi = aiVerification
+
+  if (!effectiveAi) {
     return (
       <div className="flex flex-col gap-1 items-start min-w-[140px]">
         <span className="text-xs text-slate-400 italic">— Pending AI Check —</span>
@@ -231,8 +235,8 @@ function renderAiEligibilityCell(
     )
   }
 
-  const isEligible = aiVerification.status === 'Eligible'
-  const isPartially = aiVerification.status === 'Partially Eligible'
+  const isEligible = effectiveAi.status === 'Eligible'
+  const isPartially = effectiveAi.status === 'Partially Eligible'
 
   return (
     <div className="flex flex-col gap-1.5 items-start min-w-[150px]">
@@ -253,17 +257,17 @@ function renderAiEligibilityCell(
           ) : (
             <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
           )}
-          {aiVerification.status}
+          {effectiveAi.status}
         </span>
-        {aiVerification.score !== undefined && (
+        {effectiveAi.score !== undefined && (
           <span className="text-[10px] font-semibold text-slate-500">
-            {aiVerification.score}%
+            {effectiveAi.score}%
           </span>
         )}
       </div>
 
-      <p className="text-[11px] text-slate-600 line-clamp-1 max-w-[190px]" title={aiVerification.summary}>
-        {aiVerification.summary}
+      <p className="text-[11px] text-slate-600 line-clamp-1 max-w-[190px]" title={effectiveAi.summary}>
+        {effectiveAi.summary}
       </p>
 
       {onViewReport && (
@@ -347,21 +351,26 @@ export default function EligibilityCheckPage() {
   const handleRunAiFromHistory = async (tenderToVerify: Tender) => {
     setRunningAiTenderId(tenderToVerify.id)
     try {
-      const res = await fetch('/api/ai-verify-eligibility', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          tender: tenderToVerify,
-          pdfDataUrl: tenderToVerify.tenderDoc?.dataUrl,
-          submittedData: {
-            turnoverDoc: tenderToVerify.eligibilityCheck?.turnoverDoc,
-            experienceDoc: tenderToVerify.eligibilityCheck?.experienceDoc,
-            vendorRegDoc: tenderToVerify.eligibilityCheck?.vendorRegDoc,
-            otherDoc: tenderToVerify.eligibilityCheck?.otherDoc,
-            remarks: tenderToVerify.eligibilityCheck?.remarks || '',
-          },
-        }),
-      })
+      // Read (index) this tender's document first: text, OCR, Vision, embeddings
+      await indexTenderDocuments(tenderToVerify)
+      const call = () =>
+        fetch('/api/ai-verify-eligibility', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            tender: tenderToVerify,
+            submittedData: {
+              turnoverDoc: tenderToVerify.eligibilityCheck?.turnoverDoc,
+              experienceDoc: tenderToVerify.eligibilityCheck?.experienceDoc,
+              vendorRegDoc: tenderToVerify.eligibilityCheck?.vendorRegDoc,
+              otherDoc: tenderToVerify.eligibilityCheck?.otherDoc,
+              otherDocs: tenderToVerify.eligibilityCheck?.otherDocs,
+              remarks: tenderToVerify.eligibilityCheck?.remarks || '',
+            },
+          }),
+        })
+      let res = await call()
+      for (let i = 0; res.status === 409 && i < 5; i++) res = await call()
       const data = await res.json()
       if (data.success && data.verification) {
         const updatedTender: Tender = {
@@ -508,34 +517,16 @@ export default function EligibilityCheckPage() {
                             Action <ArrowRight />
                           </button>
                         ) : (
-                          <>
-                            <button
-                              className="table-action"
-                              title="View submitted eligibility verification documents"
-                              onClick={() => setVerifyModal({ tender: t, mode: 'view' })}
-                            >
-                              View Docs
-                            </button>
-
-                            {/* Stage Specific Edit - Only in Completed / History */}
-                            <button
-                              className="icon-action text-amber-600 hover:text-amber-800"
-                              title="Edit Eligibility Check documents (Turnover, Experience, Other Docs, Remarks)"
-                              onClick={() => setVerifyModal({ tender: t, mode: 'verify' })}
-                            >
-                              <Pencil />
-                            </button>
-                          </>
+                          <button
+                            className="table-action"
+                            title="View and edit submitted eligibility verification documents"
+                            onClick={() => setVerifyModal({ tender: t, mode: 'view' })}
+                          >
+                            View Docs
+                          </button>
                         )}
 
-                        {/* Bid documents */}
-                        <Link
-                          href={`/tender-documents/${encodeURIComponent(t.id)}`}
-                          className="icon-action"
-                          title="View auto-filled bid documents"
-                        >
-                          <FileText />
-                        </Link>
+                       
                       </div>
                     </td>
 
@@ -594,7 +585,8 @@ export default function EligibilityCheckPage() {
                             t.eligibilityCheck?.aiVerification,
                             () => setReportTender(t),
                             () => handleRunAiFromHistory(t),
-                            runningAiTenderId === t.id
+                            runningAiTenderId === t.id,
+                            t.id
                           )}
                         </td>
 

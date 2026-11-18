@@ -2,379 +2,463 @@ import { NextResponse } from 'next/server'
 import { createOpenAI } from '@ai-sdk/openai'
 import { generateObject } from 'ai'
 import { z } from 'zod'
-import { parsePdfDocument } from '@/lib/universal-document-parser'
+import { DocumentPageChunk } from '@/types/document-understanding'
+import { loadTenderEvidence, hybridRetrieve } from '@/lib/tender-evidence'
+import { ensureDocumentIndexed, pagesToChunks } from '@/lib/document-index-store'
 import { retrieveContextForQuery } from '@/lib/document-retrieval-engine'
+import { normQuote, quoteOnPage } from '@/lib/document-verifier'
+import { UsageTracker } from '@/lib/ai-usage'
 
 export const runtime = 'nodejs'
-export const maxDuration = 60
+export const maxDuration = 300
+
+const statusEnum = z.enum(['Pass', 'Fail', 'Pending', 'Under Review'])
+const situationEnum = z.enum([
+  'requirement-not-in-tender',
+  'document-not-uploaded',
+  'document-unreadable',
+  'requirement-not-satisfied',
+  'requirement-satisfied',
+  'needs-manual-review',
+])
 
 const criteriaDetailSchema = z.object({
   criteriaName: z.string().describe('Criteria name, e.g. "Annual Financial Turnover", "Past Technical Experience", "Statutory & Tax Registrations"'),
-  status: z.enum(['Pass', 'Fail', 'Pending', 'Under Review']),
-  tenderRequirement: z.string().describe('Exact criteria from tender specification or NIT clauses'),
-  userSubmitted: z.string().describe('Exact proof or value submitted by the bidder'),
-  comparisonResult: z.string().describe('Detailed comparison result, e.g. "Meets requirement: submitted ₹5.20 Cr >= required ₹4.50 Cr (Surplus: +₹0.70 Cr)" or "Shortfall of ₹1.70 Cr" or "Certificate missing"'),
+  status: statusEnum,
+  tenderRequirement: z.string().describe('The requirement exactly as written in the tender, or "Not specified in the tender document"'),
+  tenderSourceDocument: z.string().describe('Document name from the "DOCUMENT" header where the requirement appears, or ""'),
+  tenderSourcePage: z.string().describe('Physical PDF page number from the "PAGE: X" header where the requirement appears, or "N/A"'),
+  tenderSourceQuote: z.string().describe('Verbatim quote of the tender clause copied character-for-character, or "" if not in the tender'),
+  userSubmitted: z.string().describe('What the bidder document actually shows (value + document name + page), or "Not uploaded" / "Unreadable"'),
+  bidderSourceQuote: z.string().describe('Verbatim text from the bidder document that shows the submitted value, or ""'),
+  comparisonResult: z.string().describe('Requirement vs submitted comparison with numbers, e.g. "Submitted ₹5.20 Cr ≥ required ₹4.50 Cr"'),
+  evidenceSituation: situationEnum,
   rejectionReason: z.string().optional().describe('Specific rejection reason if status is Fail'),
-  isMandatory: z.boolean().describe('True if this is a mandatory pre-qualification gate'),
+  isMandatory: z.boolean().describe('True if this is a mandatory pre-qualification gate per the tender'),
+})
+
+const checkSchema = z.object({
+  status: statusEnum,
+  required: z.string(),
+  submitted: z.string(),
+  notes: z.string(),
+  shortfallOrSurplus: z.string().optional(),
 })
 
 const eligibilitySchema = z.object({
-  status: z.enum(['Eligible', 'Not Eligible', 'Partially Eligible']).describe('Final eligibility determination'),
-  score: z.number().describe('Eligibility compliance score between 0 and 100'),
+  status: z.enum(['Eligible', 'Not Eligible', 'Partially Eligible', 'Insufficient Information']),
   summary: z.string().describe('Concise high-level summary of the eligibility outcome'),
-  overallReasoning: z.string().describe('Detailed 3-5 sentence explanation articulating the clear reasoning behind this eligibility result'),
-  conclusion: z.string().describe('Final concluding verdict explaining why the bidder is Eligible, Not Eligible, or Partially Eligible'),
-  matchedCriteria: z.array(z.string()).describe('Bullet points of all criteria that successfully passed with clear explanation of how they matched'),
-  failedCriteria: z.array(z.string()).describe('Bullet points of all criteria that failed with exact rejection reasons and shortfalls'),
-  missingRequirements: z.array(z.string()).describe('List of missing documents, unverified certificates, or incomplete details'),
-  insufficientInfoNotes: z.string().optional().describe('Clear notice if information is insufficient or if additional documents are needed for conclusive verification'),
-  criteriaBreakdown: z.array(criteriaDetailSchema).describe('Side-by-side comparison list for every eligibility criteria'),
-  turnoverCheck: z.object({
-    status: z.enum(['Pass', 'Fail', 'Pending', 'Under Review']),
-    required: z.string().describe('Mandatory financial turnover requirement from tender document'),
-    submitted: z.string().describe('Turnover proof / certificate provided by bidder'),
-    notes: z.string().describe('Audit explanation comparing required vs submitted turnover'),
-    shortfallOrSurplus: z.string().optional().describe('Numeric surplus or shortfall description e.g. "+₹0.70 Cr Surplus" or "-₹1.70 Cr Shortfall"'),
-  }),
-  experienceCheck: z.object({
-    status: z.enum(['Pass', 'Fail', 'Pending', 'Under Review']),
-    required: z.string().describe('Mandatory past technical/work experience requirement from tender document'),
-    submitted: z.string().describe('Experience work order / completion certificate provided by bidder'),
-    notes: z.string().describe('Audit explanation comparing required vs submitted experience'),
-    shortfallOrSurplus: z.string().optional().describe('Capacity surplus or shortfall e.g. "+5 MW surplus capacity" or "-10 MW shortfall"'),
-  }),
+  overallReasoning: z.string().describe('3-5 sentences of reasoning based only on the evidence'),
+  conclusion: z.string().describe('Final verdict and why'),
+  matchedCriteria: z.array(z.string()),
+  failedCriteria: z.array(z.string()),
+  missingRequirements: z.array(z.string()),
+  insufficientInfoNotes: z.string().optional(),
+  criteriaBreakdown: z.array(criteriaDetailSchema).describe('One row for EVERY individual eligibility requirement found in the tender'),
+  turnoverCheck: checkSchema,
+  experienceCheck: checkSchema,
   documentsCheck: z.object({
-    status: z.enum(['Pass', 'Fail', 'Pending', 'Under Review']),
-    notes: z.string().describe('Audit explanation of registration, tax, or statutory certificates attached'),
-    missingDocs: z.array(z.string()).optional().describe('Names of missing required certificates'),
+    status: statusEnum,
+    notes: z.string(),
+    missingDocs: z.array(z.string()).optional(),
   }),
 })
 
+type Eligibility = z.infer<typeof eligibilitySchema>
+type Row = Eligibility['criteriaBreakdown'][number]
+
+const SLOTS = [
+  { key: 'turnoverDoc', label: 'Turnover Document', query: 'turnover revenue financial year audited balance sheet CA certificate UDIN net worth' },
+  { key: 'experienceDoc', label: 'Experience Document', query: 'work order completion certificate commissioning capacity value similar work experience' },
+  { key: 'vendorRegDoc', label: 'Vendor Registration', query: 'registration certificate GST PAN vendor enlistment validity' },
+  { key: 'otherDoc', label: 'Other Document', query: 'certificate registration undertaking affidavit' },
+] as const
+
+const TENDER_ELIGIBILITY_QUERIES = [
+  'eligibility criteria qualification requirements bidder must',
+  'average annual turnover financial capacity net worth crore lakh financial year',
+  'technical experience similar work completed commissioned capacity work order',
+  'documents required to be submitted registration certificate GST PAN',
+  'pre-qualification criteria qualifying requirements',
+  'पात्रता मापदंड टर्नओवर अनुभव',
+]
+
+const MAX_DOC_TEXT_CHARS = 30000
+
+function pagesText(chunks: DocumentPageChunk[]): string {
+  return chunks
+    .map(
+      c =>
+        `=== [DOCUMENT: "${c.docName}" | PAGE: ${c.pageNumber}${c.totalPages ? ` of ${c.totalPages}` : ''}${
+          c.extractionMethod && c.extractionMethod !== 'text' ? ` | read by: ${c.extractionMethod}` : ''
+        }] ===\n${c.content}`
+    )
+    .join('\n\n')
+}
+
 /**
- * Deterministic local fallback evaluator when OpenAI is unavailable
+ * Result when the AI evaluation cannot run. It never passes a criterion:
+ * an attached file is not proof that a requirement is met.
  */
-function evaluateEligibilityLocally(
-  tender: any,
-  tenderDocText: string,
-  submittedData: any
-): z.infer<typeof eligibilitySchema> {
-  const tReq =
-    tender.bid?.turnoverRequirement ||
-    tender.turnoverRequirement ||
-    (tender.bid?.financialRequirementCr ? `₹ ${tender.bid.financialRequirementCr} Crore in last 3 FYs` : '') ||
-    'Average annual turnover as per NIT pre-qualification criteria'
-
-  const eReq =
-    tender.bid?.experienceRequirement ||
-    tender.experienceRequirement ||
-    'Execution experience in similar projects as per NIT criteria'
-
-  const userRemarks = (submittedData?.remarks || '').toLowerCase()
-  const hasTurnoverDoc = !!submittedData?.turnoverDoc
-  const hasExperienceDoc = !!submittedData?.experienceDoc
-  const hasOtherDoc = !!submittedData?.otherDoc || !!submittedData?.vendorRegDoc
-
-  // Determine individual criteria states
-  let turnoverPass = hasTurnoverDoc
-  let experiencePass = hasExperienceDoc
-  let docPass = hasOtherDoc
-
-  if (userRemarks.includes('not eligible') || userRemarks.includes('shortfall') || userRemarks.includes('less than')) {
-    turnoverPass = false
-  }
-
-  const matchedCriteria: string[] = []
-  const failedCriteria: string[] = []
-  const missingRequirements: string[] = []
-
-  if (turnoverPass) {
-    matchedCriteria.push(
-      `Annual Financial Turnover: Submitted "${submittedData?.turnoverDoc?.name || 'Turnover Proof'}"${submittedData?.turnoverDoc?.value ? ` (${submittedData.turnoverDoc.value})` : ''} satisfies the tender requirement of "${tReq}".`
-    )
-  } else {
-    failedCriteria.push(
-      `Annual Financial Turnover: Mandatory turnover document is missing or does not demonstrate compliance with "${tReq}".`
-    )
-    missingRequirements.push('CA Certified Annual Turnover Certificate with UDIN and audited balance sheets for last 3 FYs.')
-  }
-
-  if (experiencePass) {
-    matchedCriteria.push(
-      `Technical Experience: Submitted "${submittedData?.experienceDoc?.name || 'Experience Certificate'}"${submittedData?.experienceDoc?.value ? ` (${submittedData.experienceDoc.value})` : ''} complies with "${eReq}".`
-    )
-  } else {
-    failedCriteria.push(
-      `Technical Experience: Past execution certificate is missing or fails to prove completion of "${eReq}".`
-    )
-    missingRequirements.push('Client Satisfactory Work Completion Certificate and Work Orders proving past execution capacity.')
-  }
-
-  if (docPass) {
-    matchedCriteria.push(
-      `Statutory Registrations: Supporting document "${submittedData?.otherDoc?.name || submittedData?.vendorRegDoc?.name || 'Registration Certificate'}" submitted.`
-    )
-  } else {
-    missingRequirements.push('Department Vendor Registration Certificate, GST, or Company PAN.')
-  }
-
-  // Calculate overall status
-  let status: 'Eligible' | 'Not Eligible' | 'Partially Eligible' = 'Eligible'
-  let score = 100
-
-  if (!turnoverPass && !experiencePass) {
-    status = 'Not Eligible'
-    score = docPass ? 25 : 0
-  } else if (!turnoverPass || !experiencePass || !docPass) {
-    status = turnoverPass && experiencePass ? 'Eligible' : 'Partially Eligible'
-    score = Math.round(((turnoverPass ? 45 : 0) + (experiencePass ? 45 : 0) + (docPass ? 10 : 0)))
-    if (!turnoverPass && !experiencePass) status = 'Not Eligible'
-  }
-
-  // Generate detailed reasoning based on status
-  let overallReasoning = ''
-  let conclusion = ''
-
-  if (status === 'Eligible') {
-    overallReasoning = `The bidder fulfills all mandatory pre-qualification criteria specified in the tender document. The annual financial turnover meets or exceeds the required threshold of ${tReq}, and the submitted past technical experience certificate confirms successful execution compliant with ${eReq}. All primary qualification parameters are verified with valid supporting documentation.`
-    conclusion = `VERDICT: ELIGIBLE. The bidder is fully qualified to participate in this tender as all mandatory technical and financial gates have been successfully verified.`
-  } else if (status === 'Not Eligible') {
-    overallReasoning = `The bidder fails to satisfy key mandatory eligibility conditions. Specifically, ${failedCriteria.join(' Furthermore, ')} Without meeting these mandatory threshold gates, the bid cannot be accepted under the tender's pre-qualification guidelines.`
-    conclusion = `VERDICT: NOT ELIGIBLE. Disqualified due to non-fulfillment of mandatory pre-qualification criteria (${!turnoverPass ? 'Turnover shortfall' : ''}${!turnoverPass && !experiencePass ? ' and ' : ''}${!experiencePass ? 'Experience shortfall' : ''}).`
-  } else {
-    overallReasoning = `The bidder partially complies with the tender requirements. While ${matchedCriteria.length > 0 ? matchedCriteria[0] : 'some criteria are met'}, other mandatory documents are pending or incomplete. Specifically: ${missingRequirements.join(' ')} Additional submission is required before final qualification can be granted.`
-    conclusion = `VERDICT: PARTIALLY ELIGIBLE. The bidder has submitted partial compliance, but final eligibility cannot be confirmed until the pending documents are uploaded and verified.`
-  }
-
-  const criteriaBreakdown = [
-    {
-      criteriaName: 'Annual Financial Turnover',
-      status: turnoverPass ? ('Pass' as const) : ('Fail' as const),
-      tenderRequirement: tReq,
-      userSubmitted: submittedData?.turnoverDoc?.name
-        ? `${submittedData.turnoverDoc.name}${submittedData.turnoverDoc.value ? ` (${submittedData.turnoverDoc.value})` : ''}`
-        : 'Not submitted',
-      comparisonResult: turnoverPass
-        ? `Meets Requirement: Submitted proof satisfies "${tReq}".`
-        : `Rejection: Turnover certificate is missing or below required "${tReq}".`,
-      rejectionReason: turnoverPass ? undefined : `Mandatory turnover proof for "${tReq}" not provided.`,
-      isMandatory: true,
-    },
-    {
-      criteriaName: 'Past Technical Experience',
-      status: experiencePass ? ('Pass' as const) : ('Fail' as const),
-      tenderRequirement: eReq,
-      userSubmitted: submittedData?.experienceDoc?.name
-        ? `${submittedData.experienceDoc.name}${submittedData.experienceDoc.value ? ` (${submittedData.experienceDoc.value})` : ''}`
-        : 'Not submitted',
-      comparisonResult: experiencePass
-        ? `Meets Requirement: Completion certificate confirms compliance with "${eReq}".`
-        : `Rejection: Work completion certificate for "${eReq}" missing.`,
-      rejectionReason: experiencePass ? undefined : `Mandatory experience proof for "${eReq}" not provided.`,
-      isMandatory: true,
-    },
-    {
-      criteriaName: 'Statutory & Tax Registrations',
-      status: docPass ? ('Pass' as const) : ('Pending' as const),
-      tenderRequirement: 'GST, Company PAN, and Department/Vendor Registration',
-      userSubmitted: submittedData?.otherDoc?.name || submittedData?.vendorRegDoc?.name || 'Not attached',
-      comparisonResult: docPass ? 'Supporting registration document attached.' : 'Statutory documents pending upload.',
-      isMandatory: false,
-    },
-  ]
-
+function manualReviewResult(reason: string, submittedAudit: Array<{ slot: string; name?: string; situation: string }>): Eligibility {
+  const rows: Row[] = submittedAudit.map(s => ({
+    criteriaName: s.slot,
+    status: s.situation === 'Not uploaded' ? 'Pending' : 'Under Review',
+    tenderRequirement: 'Not evaluated – AI evaluation unavailable',
+    tenderSourceDocument: '',
+    tenderSourcePage: 'N/A',
+    tenderSourceQuote: '',
+    userSubmitted: s.name ? `${s.name} (${s.situation})` : s.situation,
+    bidderSourceQuote: '',
+    comparisonResult: 'Not compared – manual verification required.',
+    evidenceSituation: s.situation === 'Not uploaded' ? 'document-not-uploaded' : 'needs-manual-review',
+    isMandatory: false,
+  }))
+  const check = { status: 'Under Review' as const, required: 'Not evaluated', submitted: 'Not evaluated', notes: reason }
   return {
-    status,
-    score,
-    summary:
-      status === 'Eligible'
-        ? `Bidder meets all mandatory eligibility conditions (${score}% compliance). Turnover and technical experience criteria verified.`
-        : status === 'Partially Eligible'
-        ? `Bidder partially fulfills criteria (${score}% compliance). Awaiting pending documents: ${missingRequirements[0] || 'supporting files'}.`
-        : `Bidder is Not Eligible (${score}% compliance). Failed mandatory pre-qualification criteria.`,
-    overallReasoning,
-    conclusion,
-    matchedCriteria,
-    failedCriteria,
-    missingRequirements,
-    insufficientInfoNotes:
-      status !== 'Eligible'
-        ? 'Verification is based strictly on the uploaded documents. If additional audited balance sheets or completion certificates exist, please attach them.'
-        : undefined,
-    criteriaBreakdown,
-    turnoverCheck: {
-      status: turnoverPass ? 'Pass' : 'Fail',
-      required: tReq,
-      submitted: submittedData?.turnoverDoc?.name
-        ? `${submittedData.turnoverDoc.name}${submittedData.turnoverDoc.value ? ` (${submittedData.turnoverDoc.value})` : ''}`
-        : 'No turnover certificate attached',
-      notes: turnoverPass
-        ? 'Turnover certificate / CA audited balance sheets submitted and verified against tender threshold.'
-        : `Mandatory turnover document is missing or insufficient to satisfy ${tReq}.`,
-      shortfallOrSurplus: turnoverPass ? '+Compliant' : '-Missing Proof',
-    },
-    experienceCheck: {
-      status: experiencePass ? 'Pass' : 'Fail',
-      required: eReq,
-      submitted: submittedData?.experienceDoc?.name
-        ? `${submittedData.experienceDoc.name}${submittedData.experienceDoc.value ? ` (${submittedData.experienceDoc.value})` : ''}`
-        : 'No past experience document attached',
-      notes: experiencePass
-        ? 'Client work completion certificate attached proving past execution performance.'
-        : `Mandatory past experience completion certificate is missing for ${eReq}.`,
-      shortfallOrSurplus: experiencePass ? '+Compliant' : '-Missing Proof',
-    },
-    documentsCheck: {
-      status: docPass ? 'Pass' : 'Pending',
-      notes: docPass
-        ? `Statutory documentation attached: ${submittedData?.otherDoc?.name || submittedData?.vendorRegDoc?.name || 'Supporting Doc'}.`
-        : 'Statutory documents not yet attached.',
-      missingDocs: docPass ? [] : ['GST / Registration Document'],
-    },
+    status: 'Insufficient Information',
+    summary: `AI eligibility evaluation could not be completed: ${reason} No criterion has been marked as passed.`,
+    overallReasoning: 'The tender requirements and bidder documents were not compared, so no eligibility conclusion can be drawn.',
+    conclusion: 'MANUAL VERIFICATION REQUIRED.',
+    matchedCriteria: [],
+    failedCriteria: [],
+    missingRequirements: submittedAudit.filter(s => s.situation === 'Not uploaded').map(s => s.slot),
+    insufficientInfoNotes: reason,
+    criteriaBreakdown: rows,
+    turnoverCheck: check,
+    experienceCheck: check,
+    documentsCheck: { status: 'Under Review', notes: reason, missingDocs: [] },
   }
 }
 
 export async function POST(request: Request) {
   try {
     const body = await request.json()
-    const { tender, pdfDataUrl, submittedData } = body
+    const { tender, submittedData } = body
 
     if (!tender) {
       return NextResponse.json({ error: 'Tender object is required.' }, { status: 400 })
     }
 
-    // 1. Extract Tender Document Text if PDF is provided
-    let extractedTenderDocText = ''
-    if (pdfDataUrl && typeof pdfDataUrl === 'string' && pdfDataUrl.includes('base64,')) {
-      try {
-        const base64Data = pdfDataUrl.split('base64,')[1]
-        const buffer = Buffer.from(base64Data, 'base64')
-        const arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
+    const apiKey = process.env.OPENAI_API_KEY
+    const usage = new UsageTracker()
+    const warnings: string[] = []
 
-        const parsedPdf = await parsePdfDocument(arrayBuffer, tender.tenderDoc?.name || 'Tender_NIT.pdf', {
-          maxPages: 100,
-          enableOcr: false,
-        })
+    // ── 1. TENDER evidence: this tender's own document + corrigenda (text / OCR / Vision) ─
+    const evidence = await loadTenderEvidence(tender, { usage, timeBudgetMs: 150000 })
+    warnings.push(...evidence.warnings)
+    if (evidence.incomplete) {
+      return NextResponse.json(
+        {
+          error: `The tender document is still being read (${evidence.statusText}). Please run the verification again in a moment.`,
+          pending: true,
+          usage: usage.toJSON(),
+        },
+        { status: 409 }
+      )
+    }
+    const tenderChunks = evidence.chunks
+    const tenderDocStatus = evidence.statusText
+    const readableTender = tenderChunks.filter(c => !c.content.startsWith('[EXTRACTION FAILED'))
+    const tenderTextAvailable = readableTender.reduce((n, c) => n + c.charCount, 0) > 200
 
-        if (parsedPdf.chunks.length > 0) {
-          const retrieval = retrieveContextForQuery(
-            'eligibility criteria annual financial turnover technical experience qualification documents',
-            parsedPdf.chunks,
-            12000
-          )
-          extractedTenderDocText = retrieval.formattedContext
-        }
-      } catch (pdfErr) {
-        console.warn('Could not extract PDF text for eligibility check, falling back to tender metadata:', pdfErr)
+    // Union of hybrid retrievals for each eligibility facet, in page order
+    let tenderClausesContext = ''
+    if (tenderChunks.length) {
+      const picked = new Map<string, DocumentPageChunk>()
+      const results = await Promise.all(
+        TENDER_ELIGIBILITY_QUERIES.map(q =>
+          hybridRetrieve({ tenderId: String(tender.id), docs: evidence.docs, chunks: tenderChunks, query: q, maxTokens: 8000, usage, warnings })
+        )
+      )
+      for (const r of results) {
+        for (const c of r.retrievedChunks) picked.set(c.id, c)
       }
+      if (picked.size < 5 && tenderChunks.length > 0) {
+        const fallbackPages = tenderChunks
+          .filter(c => /turnover|experience|eligibility|annual|crore|bidder/i.test(c.content) || (c.pageNumber && c.pageNumber <= 15))
+          .slice(0, 15)
+        for (const c of fallbackPages) {
+          if (!picked.has(c.id)) {
+            picked.set(c.id, c)
+          }
+        }
+      }
+
+      const ordered = Array.from(picked.values()).sort((a, b) =>
+        a.docName === b.docName ? (a.pageNumber || 0) - (b.pageNumber || 0) : a.docName.localeCompare(b.docName)
+      )
+      let budget = 90000
+      const kept: DocumentPageChunk[] = []
+      for (const c of ordered) {
+        if (budget - c.charCount < 0) {
+          warnings.push('Some matching tender pages were left out of the AI prompt (size limit).')
+          break
+        }
+        kept.push(c)
+        budget -= c.charCount
+      }
+      tenderClausesContext = pagesText(kept)
     }
 
-    // 2. Prepare Tender Context
-    const tenderSummary = `
-TENDER SPECIFICATIONS:
-- Tender ID: ${tender.id}
-- Title: "${tender.title}"
-- Authority: ${tender.authority}
-- Department: ${tender.department}
-- State: ${tender.state}
-- Estimated Value: ${tender.value || 'N/A'}
-- Stored Turnover Requirement: ${tender.bid?.turnoverRequirement || tender.turnoverRequirement || (tender.bid?.financialRequirementCr ? `₹ ${tender.bid.financialRequirementCr} Crore in last 3 FYs` : 'N/A')}
-- Stored Experience Requirement: ${tender.bid?.experienceRequirement || tender.experienceRequirement || 'N/A'}
-- Stored Technical Requirement: ${tender.bid?.technicalRequirement || 'N/A'}
-`
+    // ── 2. BIDDER documents (indexed under this tender, role "bidder": OCR + Vision for scans) ──
+    const submittedAudit: Array<{ slot: string; name?: string; situation: string; pagesRead?: number }> = []
+    const bidderTextBlocks: string[] = []
+    const bidderChunks: DocumentPageChunk[] = []
 
-    // 3. Prepare User Submitted Data Context
-    const submissionSummary = `
-USER SUBMITTED ELIGIBILITY VERIFICATION DETAILS:
-- 1. Turnover Document: ${submittedData?.turnoverDoc ? `Attached: "${submittedData.turnoverDoc.name}" (${submittedData.turnoverDoc.size ? Math.round(submittedData.turnoverDoc.size / 1024) : 'N/A'} KB)${submittedData.turnoverDoc.value ? ` | Claimed Value: ${submittedData.turnoverDoc.value}` : ''}` : 'NOT ATTACHED'}
-- 2. Experience Document: ${submittedData?.experienceDoc ? `Attached: "${submittedData.experienceDoc.name}" (${submittedData.experienceDoc.size ? Math.round(submittedData.experienceDoc.size / 1024) : 'N/A'} KB)${submittedData.experienceDoc.value ? ` | Claimed Experience: ${submittedData.experienceDoc.value}` : ''}` : 'NOT ATTACHED'}
-- 3. Vendor Registration / Other Document: ${submittedData?.vendorRegDoc || submittedData?.otherDoc ? `Attached: "${submittedData?.vendorRegDoc?.name || submittedData?.otherDoc?.name}"` : 'NOT ATTACHED'}
-- 4. User Remarks / Notes: "${submittedData?.remarks || 'No remarks provided'}"
-`
+    const slotDocs: Array<{ label: string; query: string; doc: any }> = SLOTS.map(s => ({
+      label: s.label,
+      query: s.query,
+      doc: submittedData?.[s.key],
+    }))
+    if (Array.isArray(submittedData?.otherDocs)) {
+      const seen = new Set(slotDocs.map(s => s.doc?.dataUrl).filter(Boolean))
+      submittedData.otherDocs
+        .filter((d: any) => d && !seen.has(d.dataUrl))
+        .forEach((d: any, i: number) =>
+          slotDocs.push({ label: d.referenceNote ? `Other: ${d.referenceNote}` : `Other Document ${i + 2}`, query: 'certificate registration', doc: d })
+        )
+    }
 
-    // 4. Try Calling OpenAI API if configured
-    const apiKey = process.env.OPENAI_API_KEY
-    const modelName = process.env.OPENAI_MODEL || 'gpt-4o'
+    // Process all bidder documents in parallel for high performance
+    const processedSlots = await Promise.all(
+      slotDocs.map(async slot => {
+        const doc = slot.doc
+        if (!doc) {
+          return {
+            audit: { slot: slot.label, situation: 'Not uploaded' },
+            textBlock: `--- ${slot.label}: NOT UPLOADED ---`,
+            chunks: [] as DocumentPageChunk[],
+          }
+        }
+        const name: string = doc.name || slot.label
+        if (!doc.dataUrl) {
+          return {
+            audit: { slot: slot.label, name, situation: 'Uploaded but could not be read (file content not stored)' },
+            textBlock: `--- ${slot.label}: "${name}" UPLOADED BUT UNREADABLE (file content not stored) ---`,
+            chunks: [] as DocumentPageChunk[],
+          }
+        }
+        try {
+          const indexed = await ensureDocumentIndexed({
+            tenderId: String(tender.id),
+            role: 'bidder',
+            docName: name,
+            source: doc.dataUrl,
+            mimeType: doc.type,
+            usage,
+            timeBudgetMs: 60000,
+          })
+          if (indexed.status === 'failed' && !indexed.pages.length) {
+            return {
+              audit: { slot: slot.label, name, situation: `Uploaded but could not be read (${indexed.error})` },
+              textBlock: `--- ${slot.label}: "${name}" UPLOADED BUT UNREADABLE (${indexed.error}) ---`,
+              chunks: [] as DocumentPageChunk[],
+            }
+          }
+          const chunks = pagesToChunks(indexed, indexed.pages)
+          const readable = chunks.filter(c => !c.content.startsWith('[EXTRACTION FAILED'))
+          if (!readable.length) {
+            return {
+              audit: {
+                slot: slot.label,
+                name,
+                situation: `Uploaded but unreadable – no text result (${indexed.pageCount} page(s))`,
+                pagesRead: indexed.pageCount,
+              },
+              textBlock: `--- ${slot.label}: "${name}" UPLOADED BUT UNREADABLE ---`,
+              chunks: [] as DocumentPageChunk[],
+            }
+          }
+          let text = pagesText(readable)
+          if (text.length > MAX_DOC_TEXT_CHARS) {
+            const r = retrieveContextForQuery(slot.query, readable, MAX_DOC_TEXT_CHARS / 4)
+            text = pagesText(r.retrievedChunks)
+          }
+          return {
+            audit: { slot: slot.label, name, situation: `Read (${indexed.pageCount} page(s))`, pagesRead: indexed.pageCount },
+            textBlock: `--- ${slot.label}: "${name}" (${indexed.pageCount} page(s)) ---\n${text}`,
+            chunks,
+          }
+        } catch (docErr: any) {
+          return {
+            audit: { slot: slot.label, name, situation: `Read error (${docErr?.message || 'failed'})` },
+            textBlock: `--- ${slot.label}: "${name}" UNREADABLE ---`,
+            chunks: [] as DocumentPageChunk[],
+          }
+        }
+      })
+    )
 
-    if (apiKey) {
+    for (const p of processedSlots) {
+      submittedAudit.push(p.audit)
+      bidderTextBlocks.push(p.textBlock)
+      bidderChunks.push(...p.chunks)
+    }
+
+    // ── 3. OpenAI evaluation, strictly grounded in the evidence above ───────────────────
+    const storedReqs = `
+TENDER FMS RECORD (auto-filled earlier; may be wrong – use only to cross-check, the tender text below is authoritative):
+- Tender ID: ${tender.id} | Title: "${tender.title}" | Authority: ${tender.authority || 'N/A'}
+- Stored Turnover Requirement: ${tender.bid?.turnoverRequirement || tender.turnoverRequirement || 'Not recorded'}
+- Stored Experience Requirement: ${tender.bid?.experienceRequirement || tender.experienceRequirement || 'Not recorded'}
+- Stored Technical Requirement: ${tender.bid?.technicalRequirement || 'Not recorded'}`
+
+    const systemPrompt = `You are the "Tender Eligibility Evaluator". You compare a tender's eligibility requirements with the bidder's submitted documents.
+
+ABSOLUTE RULES:
+1. Tender requirements come ONLY from "TENDER DOCUMENT – ELIGIBILITY PASSAGES". Copy each requirement verbatim into tenderRequirement and tenderSourceQuote, and give the DOCUMENT name and PAGE number from the "=== [DOCUMENT … | PAGE: X" header. If a requirement is not in those passages, use evidenceSituation "requirement-not-in-tender", tenderSourceQuote "" and never invent a threshold (no assumed turnover, years, capacity, GST or certificate requirements).
+2. Bidder facts come ONLY from "BIDDER DOCUMENTS" text. File names and user remarks are NOT evidence of values. Copy the bidder text that shows each value into bidderSourceQuote.
+3. Keep these situations separate (evidenceSituation):
+   - requirement-not-in-tender: the tender does not state this requirement
+   - document-not-uploaded: no document was uploaded for it
+   - document-unreadable: a document was uploaded but could not be read
+   - requirement-not-satisfied: document read and value is below / does not meet the requirement
+   - requirement-satisfied: document read and value meets the requirement (show the numbers)
+   - needs-manual-review: anything ambiguous, low-quality scan, conflicting, or a value read only by Vision without OCR confirmation
+4. Status "Pass" only for requirement-satisfied. "Fail" only for requirement-not-satisfied or document-not-uploaded for a mandatory requirement. Otherwise "Pending" or "Under Review".
+5. Overall status:
+   - "Eligible": every mandatory requirement found in the tender is requirement-satisfied.
+   - "Not Eligible": at least one mandatory requirement is requirement-not-satisfied (proven shortfall).
+   - "Partially Eligible": some mandatory requirements satisfied, others missing documents.
+   - "Insufficient Information": the tender requirements could not be read, or key bidder documents are unreadable / ambiguous.
+6. If two tender clauses give different values (e.g. original vs corrigendum), report both with pages and do not choose one unless the tender states precedence.
+7. A requirement spread over several pages (e.g. a table continued on the next page) must include rows from ALL those pages.`
+
+    const userText = `TENDER DOCUMENT STATUS: ${tenderDocStatus}
+
+TENDER DOCUMENT – ELIGIBILITY PASSAGES (authoritative):
+${tenderClausesContext || '(No tender text available – requirements cannot be verified from the document.)'}
+${storedReqs}
+
+BIDDER DOCUMENTS:
+${bidderTextBlocks.join('\n\n')}
+
+USER REMARKS (context only, not evidence): "${submittedData?.remarks || 'None'}"
+
+Produce the structured eligibility evaluation. List EVERY individual eligibility requirement found in the tender passages in criteriaBreakdown.`
+
+    let ai: Eligibility
+    let aiFailed = false
+    if (!apiKey) {
+      ai = manualReviewResult('OPENAI_API_KEY is not configured on the server.', submittedAudit)
+      aiFailed = true
+    } else {
       try {
         const openai = createOpenAI({ apiKey })
-
-        const systemPrompt = `You are the "Tender Eligibility Evaluator AI".
-Your mission is to perform an objective, strict, and deeply reasoned evaluation of whether a bidding firm is "Eligible", "Not Eligible", or "Partially Eligible" for a government tender.
-
-DETAILED SUMMARY & REASONING RULES (VERY IMPORTANT):
-1. ELIGIBLE VERDICT:
-   - If the user satisfies all mandatory eligibility conditions, explain CLEARLY and IN DETAIL why the user is eligible.
-   - List every single criteria that successfully matched in "matchedCriteria" and how the user's submitted values or certificates fulfill or exceed the tender thresholds.
-
-2. NOT ELIGIBLE VERDICT:
-   - If the user fails any mandatory condition, clearly state why the user is NOT eligible.
-   - Specifically identify which conditions failed and provide detailed, actionable rejection reasons in "failedCriteria" (e.g., specific monetary shortfall, insufficient capacity, or missing mandatory certificate).
-
-3. PARTIALLY ELIGIBLE VERDICT:
-   - If some conditions are fulfilled but others are pending, missing, or partially fulfilled, clearly explain what is fulfilled vs what is incomplete.
-   - List every missing document or pending requirement in "missingRequirements".
-
-4. TENDER REQUIREMENT VS SUBMITTED COMPARISON:
-   - Populate "criteriaBreakdown" with a side-by-side comparison for every criteria: (Criteria Name, Status Pass/Fail/Pending, Tender Requirement, User Submitted, Comparison Result, Rejection Reason if any).
-
-5. STRICT ZERO-ASSUMPTION & GROUNDING RULE:
-   - Base your evaluation SOLELY on the actual tender conditions and the user's submitted proofs.
-   - Do NOT assume or imagine unattached documents.
-   - If information is insufficient to confirm a criteria, clearly mention it in "insufficientInfoNotes" stating that additional information is required.`
-
-        const userPrompt = `${tenderSummary}
-${extractedTenderDocText ? `\nEXTRACTED TENDER DOCUMENT CLAUSES (Strict Source):\n${extractedTenderDocText}\n` : ''}
-${submissionSummary}
-
-Perform a rigorous evaluation comparing the tender requirements against the user's submitted details and generate the structured eligibility determination with detailed reasoning.`
-
+        const model = process.env.OPENAI_MODEL || 'gpt-4o'
         const result = await generateObject({
-          model: openai(modelName),
+          model: openai(model),
           schema: eligibilitySchema,
           system: systemPrompt,
-          prompt: userPrompt,
-          temperature: 0.1,
+          prompt: userText,
+          temperature: 0,
         })
-
-        if (result && result.object) {
-          return NextResponse.json({
-            success: true,
-            verification: {
-              ...result.object,
-              verifiedAt: new Date().toISOString(),
-              tenderRequirements: {
-                turnover: tender.bid?.turnoverRequirement || tender.turnoverRequirement || (tender.bid?.financialRequirementCr ? `₹ ${tender.bid.financialRequirementCr} Crore` : undefined),
-                experience: tender.bid?.experienceRequirement || tender.experienceRequirement || undefined,
-              },
-            },
-          })
-        }
+        usage.add('chat', model, result.usage as any)
+        ai = result.object
       } catch (aiErr: any) {
-        console.warn('OpenAI generateObject warning (falling back to local engine):', aiErr?.message || aiErr)
+        console.error('Eligibility AI call failed:', aiErr?.message || aiErr)
+        ai = manualReviewResult(`The OpenAI request failed (${aiErr?.message || 'error'}). Please retry.`, submittedAudit)
+        aiFailed = true
       }
     }
+    if (aiFailed) warnings.push('AI evaluation did not run – result is "Insufficient Information" and every criterion needs manual verification.')
 
-    // 5. Fallback Local Evaluation Engine
-    const localResult = evaluateEligibilityLocally(tender, extractedTenderDocText, submittedData)
+    // ── 4. Deterministic verification of every quote against the original pages ─────────
+    const allTenderNorm = normQuote(readableTender.map(c => c.content).join('\n'))
+    const bidderNorm = normQuote(bidderChunks.map(c => c.content).join('\n'))
+    const tenderQuoteOnCitedPage = (row: Row): boolean => {
+      const q = row.tenderSourceQuote?.trim()
+      if (!q || !tenderTextAvailable) return false
+      const pageNums = String(row.tenderSourcePage || '').match(/\d+/g)?.map(Number) || []
+      return readableTender.some(
+        c =>
+          pageNums.includes(c.pageNumber || -1) &&
+          (!row.tenderSourceDocument || c.docName === row.tenderSourceDocument) &&
+          quoteOnPage(q, c.content)
+      )
+    }
+
+    const breakdown = (ai.criteriaBreakdown || []).map(row => {
+      const quoteOk = tenderQuoteOnCitedPage(row)
+      const bq = row.bidderSourceQuote?.trim() || ''
+      const bidderOk = !!bq && (bidderChunks.some(c => quoteOnPage(bq, c.content)) || bidderNorm.includes(normQuote(bq)))
+      const r: any = { ...row, tenderQuoteVerified: quoteOk, bidderQuoteVerified: bidderOk }
+      const notes: string[] = []
+      if (row.tenderSourceQuote?.trim() && !quoteOk) {
+        notes.push(
+          allTenderNorm.includes(normQuote(row.tenderSourceQuote))
+            ? `the tender quote exists but not on the cited page ${row.tenderSourcePage}`
+            : 'the quoted tender clause was not found in the extracted tender text'
+        )
+      }
+      if (row.status === 'Pass' && !row.tenderSourceQuote?.trim()) notes.push('no tender clause was quoted')
+      if (row.status === 'Pass' && !bq) notes.push('no bidder evidence quote was given')
+      if (bq && !bidderOk) notes.push('the bidder evidence quote was not found in the bidder documents')
+      const decisive = row.status === 'Pass' || (row.status === 'Fail' && row.evidenceSituation === 'requirement-not-satisfied')
+      if (decisive && notes.length > 0) {
+        r.status = 'Under Review'
+        r.evidenceSituation = 'needs-manual-review'
+        r.comparisonResult = `${row.comparisonResult} [System: ${notes.join('; ')} – manual verification required.]`
+      }
+      return r
+    })
+
+    const unverifiedQuotes = breakdown.filter((r: any) => r.tenderSourceQuote && !r.tenderQuoteVerified).length
+    if (unverifiedQuotes > 0) {
+      warnings.push(`${unverifiedQuotes} tender requirement quote(s) returned by the AI were not found on the cited tender page.`)
+    }
+
+    let status: Eligibility['status'] = ai.status
+    const mandatory = breakdown.filter((r: any) => r.isMandatory)
+    const mandatoryPass = mandatory.filter((r: any) => r.status === 'Pass').length
+    const provenFail = mandatory.some((r: any) => r.status === 'Fail' && r.evidenceSituation === 'requirement-not-satisfied')
+
+    if (!tenderTextAvailable) {
+      status = 'Insufficient Information'
+      warnings.push('The tender document text was not available, so requirements could not be verified against the tender.')
+    } else if (status === 'Eligible' && (mandatory.length === 0 || mandatoryPass < mandatory.length)) {
+      status = provenFail ? 'Not Eligible' : 'Insufficient Information'
+    } else if (status === 'Not Eligible' && !provenFail) {
+      status = mandatoryPass > 0 ? 'Partially Eligible' : 'Insufficient Information'
+    }
+
+    // Score is a computed ratio (mandatory criteria verified as passing), not a model guess.
+    const score = mandatory.length ? Math.round((mandatoryPass / mandatory.length) * 100) : 0
+
+    const finalSummary =
+      status !== ai.status
+        ? `${ai.summary} [System adjustment: result changed from "${ai.status}" to "${status}" because the evidence could not be fully verified against the original documents.]`
+        : ai.summary
+    console.info('[ai-verify-eligibility] usage', JSON.stringify(usage.toJSON()))
+
     return NextResponse.json({
       success: true,
       verification: {
-        ...localResult,
+        ...ai,
+        status,
+        score,
+        summary: finalSummary,
+        criteriaBreakdown: breakdown,
+        insufficientInfoNotes: [ai.insufficientInfoNotes, ...warnings].filter(Boolean).join(' ') || undefined,
+        evidenceAudit: {
+          tenderDocument: tenderDocStatus,
+          submittedDocuments: submittedAudit,
+          warnings,
+        },
+        aiEvaluationRan: !aiFailed,
         verifiedAt: new Date().toISOString(),
         tenderRequirements: {
-          turnover: tender.bid?.turnoverRequirement || tender.turnoverRequirement || (tender.bid?.financialRequirementCr ? `₹ ${tender.bid.financialRequirementCr} Crore` : undefined),
-          experience: tender.bid?.experienceRequirement || tender.experienceRequirement || undefined,
+          turnover: ai.turnoverCheck?.required,
+          experience: ai.experienceCheck?.required,
         },
       },
+      usage: usage.toJSON(),
     })
   } catch (err: any) {
     console.error('Error in ai-verify-eligibility route:', err)
     return NextResponse.json(
-      {
-        error: 'Failed to verify eligibility.',
-        details: err?.message || 'Internal error',
-      },
+      { error: 'Failed to verify eligibility.', details: err?.message || 'Internal error' },
       { status: 500 }
     )
   }

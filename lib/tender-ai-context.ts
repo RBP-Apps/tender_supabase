@@ -154,9 +154,7 @@ export function sanitizeTenderForAI(tender: any): any {
       uploadDate: tender.portalUpload.uploadDate,
       remarks: tender.portalUpload.remarks,
       completedAt: tender.portalUpload.completedAt,
-      checklistSource:
-        tender.portalUpload.checklistSource ||
-        'CHECK LIST OF DOCUMENTS TO BE UPLOADED IN THE E-BIDDING PORTAL',
+      checklistSource: tender.portalUpload.checklistSource || 'Tender FMS portal checklist',
       checklistCount: Array.isArray(tender.portalUpload.checklist)
         ? tender.portalUpload.checklist.length
         : 0,
@@ -292,14 +290,18 @@ export function formatTenderDetailedContext(tender: any): string {
   ctx += `- Assigned Owner / Manager: ${tender.owner || 'Admin'}\n`
   if (tender.remarks) ctx += `- Overview Remarks: ${tender.remarks}\n`
 
-  // 6 AI Auto-Fill Parameters
-  ctx += `\n--- 6 MANDATORY AI AUTO-FILL REQUIREMENTS ---\n`
-  ctx += `- 1. GST Section: ${tender.gstSection || bid.gstSection || '18% / Section 9(3)'}\n`
-  ctx += `- 2. Tender Fee + GST: ${tender.tenderFeePlusGst || bid.tenderFeePlusGst || bid.tenderFeePerPackage || 'Not specified'}\n`
-  ctx += `- 3. Test Report Compliance: ${tender.testReportCompliance || bid.testReportCompliance || 'NABL accredited laboratory report required'}\n`
-  ctx += `- 4. MAF Requirement: ${tender.mafRequirement || bid.mafRequirement || 'OEM Manufacturer Authorization Form required'}\n`
-  ctx += `- 5. Experience Requirement: ${tender.experienceRequirement || bid.experienceRequirement || 'Previous government / PSU project completion certificate'}\n`
-  ctx += `- 6. Turnover Requirement: ${tender.turnoverRequirement || bid.turnoverRequirement || 'Annual financial turnover certified by CA with UDIN'}\n`
+  // 6 AI Auto-Fill Parameters. These are database values (auto-filled earlier,
+  // possibly edited by users). Missing values are shown as missing – never
+  // replaced by generic defaults, which the model used to repeat as facts.
+  const NA = 'Not recorded in Tender FMS (check the tender document)'
+  ctx += `\n--- 6 AI AUTO-FILL FIELDS (Tender FMS record – NOT the tender PDF; cite as "Tender FMS record") ---\n`
+  ctx += `- 1. GST Section: ${tender.gstSection || bid.gstSection || NA}\n`
+  ctx += `- 2. Tender Fee + GST: ${tender.tenderFeePlusGst || bid.tenderFeePlusGst || NA}\n`
+  ctx += `- 3. Test Report Compliance: ${tender.testReportCompliance || bid.testReportCompliance || NA}\n`
+  ctx += `- 4. MAF Requirement: ${tender.mafRequirement || bid.mafRequirement || NA}\n`
+  ctx += `- 5. Experience Requirement: ${tender.experienceRequirement || bid.experienceRequirement || NA}\n`
+  ctx += `- 6. Turnover Requirement: ${tender.turnoverRequirement || bid.turnoverRequirement || NA}\n`
+  if (bid.tenderFeePerPackage) ctx += `- Tender Fee per Package: ${bid.tenderFeePerPackage}\n`
 
   // Bid & Commercial Details
   if (bid.rfsNo || bid.bidValidityDays || bid.beneficiaryBank?.accountNo) {
@@ -334,7 +336,7 @@ export function formatTenderDetailedContext(tender: any): string {
   ctx += `- Stage 01 (Eligibility Check): Turnover Doc: ${ec.turnoverDoc ? '✅ Attached' : '❌ Pending'} | Experience Doc: ${ec.experienceDoc ? '✅ Attached' : '❌ Pending'} | Vendor Reg: ${ec.vendorRegDoc ? '✅ Attached' : '❌ Pending'}${ec.remarks ? ` | Notes: "${ec.remarks}"` : ''}\n`
   ctx += `- Stage 02 (Sample Details): MAF Letter: ${sd.mafLetter ? '✅ Attached' : '❌ Pending'} | Test Report: ${sd.testReport ? '✅ Attached' : '❌ Pending'} | BIS Certificate: ${sd.bisCertificate ? '✅ Attached' : '❌ Pending'}${sd.remarks ? ` | Notes: "${sd.remarks}"` : ''}\n`
   ctx += `- Stage 03 (EMD Ready): Amount: ${emd.amount || 'Pending'} | Payment Mode: ${emd.amountSource || 'N/A'} | UTR: ${emd.utrNumber || 'Not recorded'} | Date: ${emd.date || 'N/A'}${emd.remarks ? ` | Notes: "${emd.remarks}"` : ''}\n`
-  ctx += `- Stage 05 (Portal Upload): Portal: ${pu.portalName || 'e-Procurement'} (${pu.portalUrl || 'https://eproc.cgstate.gov.in'}) | Ack Ref: ${pu.ackNumber || 'Pending'} | Upload Date: ${pu.uploadDate || 'N/A'}\n`
+  ctx += `- Stage 05 (Portal Upload): Portal: ${pu.portalName || 'Not recorded'}${pu.portalUrl ? ` (${pu.portalUrl})` : ''} | Ack Ref: ${pu.ackNumber || 'Pending'} | Upload Date: ${pu.uploadDate || 'N/A'}\n`
   ctx += `- Stage 06 (Submit in Website): Online Submission: ${sub.submittedOnline || 'N/A'} | Token: ${sub.tokenNumber || 'N/A'} | Date: ${sub.submissionDate || 'N/A'}\n`
   ctx += `- Stage 07 (Technical Open Check): Status: ${toc.status || 'Pending'} | Opening Date: ${toc.openingDate || 'N/A'} | Evaluation Criteria: ${toc.evaluationCriteria || 'N/A'}\n`
   ctx += `- Stage 08 (Financial Open Check): Status: ${foc.status || 'Pending'} | L1 Bidder: ${foc.l1Bidder || 'N/A'} | L1 Price: ${foc.l1Price || 'N/A'} | Our Price: ${foc.ourPrice || 'N/A'}\n`
@@ -342,15 +344,21 @@ export function formatTenderDetailedContext(tender: any): string {
     ctx += `- Stage 10 (Work Order): WO No: ${wo.workOrderNumber} | Date: ${wo.workOrderDate || 'N/A'} | Value: ${wo.contractValue || 'N/A'} | BG Amount: ${wo.bgAmount || 'N/A'} (Bank: ${wo.bgBankName || 'N/A'})\n`
   }
 
-  // Tender Notice (NIT) Stored Document & Portal Checklist Details
+  // Tender Notice (NIT) stored document & portal checklist – only what is actually recorded.
+  // (A hard-coded description of one specific CREDA tender used to be injected here
+  // for EVERY tender, so the AI quoted another tender's page numbers and checklist.)
   ctx += `\n--- STORED TENDER NOTICE (NIT) & PORTAL CHECKLIST ---\n`
-  ctx += `- Stored Tender Document Name: ${tender.tenderDoc?.name || 'Tender Notice NIT Document'} (Status: Already uploaded and permanently stored in database repository)\n`
-  ctx += `- IMPORTANT INSTRUCTION FOR AI: The original tender document was already uploaded during creation and is stored in the system. NEVER ask the user to upload it again!\n`
-  ctx += `- Section "CHECK LIST OF DOCUMENTS TO BE UPLOADED IN THE E-BIDDING PORTAL":\n`
-  ctx += `  * Page Number in the Tender NIT PDF: Page 5 (Page 05 of the official 39-page bid document No. 200560/CREDA/Solar Off-grid Inverter/2026-27).\n`
-  ctx += `  * Module in Tender FMS Application: Stage 07 • Document Upload in portal (/document-upload-in-portal).\n`
-  ctx += `  * Portal URL: https://eproc.cgstate.gov.in (Chhattisgarh e-Procurement Portal).\n`
-  ctx += `  * Structure: 21 mandatory checklist items covering Envelope A (Pre-Qualification: EMD, Undertaking, Signed NIT, PAN/GST, Non-debarment, Conflict affidavit, CREDA registration) and Envelope B (Technical/Financial: Test reports, CA Net Worth, CA Turnover, ITRs, Experience/Performance certificates, MAF letter, Schedules I-III, Technical Data Sheets, Service centers).\n`
+  if (tender.tenderDoc?.name) {
+    ctx += `- Stored Tender Document: "${tender.tenderDoc.name}". Its TEXT is NOT included here unless it appears in "EXTRACTED GROUND-TRUTH DOCUMENT SECTIONS". If it is not there, tell the user to attach it with the "Attach tender document" button – do not answer tender-document questions from memory.\n`
+  } else {
+    ctx += `- No tender document is stored for this tender.\n`
+  }
+  if (pu.checklistCount) {
+    ctx += `- Portal checklist recorded in Tender FMS (${pu.checklistCount} items, source: ${pu.checklistSource}):\n`
+    for (const c of pu.checklist || []) {
+      ctx += `  * ${c.docName}${c.clauseOrPageRef ? ` [${c.clauseOrPageRef}]` : ''}${c.checked ? ' ✅' : ''}\n`
+    }
+  }
 
   return ctx
 }

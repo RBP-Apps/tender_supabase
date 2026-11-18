@@ -24,6 +24,14 @@ export interface ParsedFileInfo {
   isImage?: boolean
   isScanned?: boolean
   chunks?: DocumentPageChunk[]
+  executiveSummary?: string
+  documentMap?: any[]
+  /** Server document index (pages stored in Supabase; only this id is sent with questions) */
+  indexId?: string
+  /** Tender id (or chat scope) the index belongs to – the server rejects any other scope */
+  indexScopeId?: string
+  /** What the server extraction did (OCR / Vision / unreadable pages) */
+  indexSummary?: string
 }
 
 /**
@@ -60,6 +68,8 @@ export async function parseFileForChat(
       isImage: result.isImage,
       isScanned: result.isScanned,
       chunks: result.chunks,
+      executiveSummary: result.executiveSummary,
+      documentMap: result.documentMap,
     }
   } catch (err: any) {
     console.warn(`Universal parser warning for ${file.name}, using safe fallback:`, err)

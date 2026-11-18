@@ -1,10 +1,13 @@
+import { indexTenderDocuments } from '@/lib/document-index-client'
 import {
   SampleDocumentItem,
   Tender,
   TechnicalComponent,
   FieldRequirementAudit,
   SampleRequirementsAudit,
+  SampleOtherDocumentRequirement,
 } from '@/types/tender'
+
 
 export interface AutoFetchResult {
   mafLetter: SampleDocumentItem | null
@@ -474,134 +477,99 @@ export async function autoFetchSampleDetailsWithAI(tender: Tender): Promise<Auto
 }
 
 /**
- * Client helper to check whether Test Report and BIS Certificate are mandated by the tender PDF / metadata.
- * Calls /api/ai-check-sample-requirements with fallback to client-side heuristic.
+ * Client helper to check whether MAF, Test Report, BIS Certificate, and Product Sample
+ * are mandated by the original tender PDF.
+ * Strictly source-grounded: Calls /api/ai-check-sample-requirements using tender.tenderDoc.dataUrl.
  */
 export async function checkSampleRequirementsWithAI(
-  tender: Tender
+  tender: Tender,
+  onProgress?: (message: string) => void
 ): Promise<SampleRequirementsAudit> {
-  const comp = tender.bid?.testReportCompliance || ''
-  const components = tender.bid?.technicalComponents || []
-  const titleLower = (tender.title || '').toLowerCase()
+  const DEFAULT_PDF = 'Image_Module_Tender_11f1aec243f3da04a696b42e99c9ac7b.pdf'
+  const docName = tender.tenderDoc?.name || DEFAULT_PDF
+  const pdfUrl =
+    tender.tenderDoc?.dataUrl ||
+    (tender.tenderDoc?.name ? `/docs/${tender.tenderDoc.name}` : undefined) ||
+    `/docs/${DEFAULT_PDF}`
 
-  // Baseline client-side heuristic in case network or server API is unavailable
-  const buildDefaultAudit = (): SampleRequirementsAudit => {
-    const isSolarOrElectrical =
-      components.some(c => /solar|pump|inverter|motor|module|cable|transformer|pmsm|switchgear/i.test(c.item)) ||
-      /solar|pump|pumping|rooftop|substation|transmission/i.test(titleLower)
-
-    const hasTestCompliance = comp.trim().length > 0 && !comp.toLowerCase().includes('not applicable')
-
-    const testIsRequired = hasTestCompliance || isSolarOrElectrical
-    const testStatus: 'Required' | 'Not Required' = testIsRequired ? 'Required' : 'Not Required'
-    const testClause = hasTestCompliance
-      ? 'Tender Technical Bid Specification - Test Report Compliance'
-      : testIsRequired
-      ? 'Technical Standards for Specified Equipment / Components'
-      : 'NIT Technical Scope & Bill of Quantities'
-    const testReasoning = hasTestCompliance
-      ? `The tender document mandates submission of valid laboratory test report(s): "${comp.trim()}".`
-      : testIsRequired
-      ? 'Government procurement rules for electrical/solar equipment mandate accredited type test reports (NABL / ERDA approved).'
-      : 'The tender document does not mandate submission of laboratory or type test reports for this scope of work.'
-
-    const testStandards: string[] = []
-    if (/14286/.test(comp)) testStandards.push('IS 14286')
-    if (/61215/.test(comp)) testStandards.push('IEC 61215')
-    if (/16221/.test(comp)) testStandards.push('IS 16221')
-    if (testIsRequired && testStandards.length === 0) testStandards.push('NABL / ERDA Accredited Lab')
-
-    const bisIsRequired = isSolarOrElectrical
-    const bisStatus: 'Required' | 'Not Required' = bisIsRequired ? 'Required' : 'Not Required'
-    const bisClause = bisIsRequired
-      ? 'Statutory Compliance: MNRE / MeitY Compulsory BIS Registration (CRS)'
-      : 'NIT Technical Scope & Bill of Quantities'
-    const bisReasoning = bisIsRequired
-      ? 'Under statutory directives of MNRE / MeitY, BIS CRS registration is mandatory for solar PV modules, inverters, and electrical components.'
-      : 'The tender document does not require BIS or CRS certification for the products/services under this scope.'
-
-    const bisStandards: string[] = []
-    if (bisIsRequired) {
-      bisStandards.push('IS 14286', 'IS 16221', 'BIS CRS Scheme')
-    }
-
-    const isCredaOrPump =
-      /creda|scip|cggy/i.test(tender.authority + ' ' + tender.title) ||
-      (components.some(c => /solar.*pump|controller|pump/i.test(c.item)) && /creda|phed|irrigation/i.test(tender.authority + ' ' + tender.title))
-
-    const sampleIsRequired = isCredaOrPump
-    const sampleStatus: 'Required' | 'Not Required' = sampleIsRequired ? 'Required' : 'Not Required'
-    const sampleClause = sampleIsRequired
-      ? 'Technical Bid Guidelines - Sample Submission'
-      : 'NIT Technical Scope & Bill of Quantities'
-    const sampleReasoning = sampleIsRequired
-      ? 'Physical prototype sample submission and delivery challan are mandated under technical evaluation guidelines for state solar pumping schemes.'
-      : 'The tender document does not mandate submission of physical product samples prior to technical bid submission.'
-
-    const sampleStandards: string[] = []
-    if (sampleIsRequired) {
-      sampleStandards.push('Physical Prototype Unit', 'Inspection Challan')
-    }
-
+  // Honest result when the tender could not be analysed. (This used to return a
+  // hard-coded audit of a different CREDA tender – fake quotes, pages and
+  // "VERIFIED_FROM_DOCUMENT" – whenever the real check failed or said UNCLEAR.)
+  const buildUnverifiedAudit = (reason: string): SampleRequirementsAudit => {
+    const item = (question: string): FieldRequirementAudit => ({
+      isRequired: false,
+      status: 'MANUAL VERIFICATION REQUIRED',
+      masterStatus: 'MANUAL VERIFICATION REQUIRED',
+      clauseOrRef: 'Not verified',
+      reasoning: reason,
+      applicableStandards: [],
+      confidence: 'low',
+      documentName: docName,
+      questionOrRequirement: question,
+      finalAnswer: `MANUAL VERIFICATION REQUIRED: ${reason}`,
+      originalDocumentEvidence: 'UNABLE TO VERIFY FROM THE PROVIDED DOCUMENT.',
+      pageNumber: 'N/A',
+      clauseOrSection: 'Not verified',
+      verificationStatus: 'UNABLE_TO_VERIFY',
+      finalRecommendation: 'Check this requirement in the original tender document.',
+    })
     return {
-      testReport: {
-        isRequired: testIsRequired,
-        status: testStatus,
-        clauseOrRef: testClause,
-        reasoning: testReasoning,
-        applicableStandards: testStandards,
-        confidence: 'high',
-      },
-      bisCertificate: {
-        isRequired: bisIsRequired,
-        status: bisStatus,
-        clauseOrRef: bisClause,
-        reasoning: bisReasoning,
-        applicableStandards: bisStandards,
-        confidence: 'high',
-      },
-      productSample: {
-        isRequired: sampleIsRequired,
-        status: sampleStatus,
-        clauseOrRef: sampleClause,
-        reasoning: sampleReasoning,
-        applicableStandards: sampleStandards,
-        confidence: 'high',
-      },
+      mafLetter: item('Is Manufacturer Authorization Form (MAF) mandatory?'),
+      testReport: item('Is Laboratory Test Report mandatory?'),
+      bisCertificate: item('Is BIS / CRS Certificate mandatory?'),
+      productSample: item('Is Physical Product Sample submission mandatory?'),
+      otherDocuments: [],
       checkedAt: new Date().toISOString(),
-      sourceType: 'heuristic',
-      summary: `Test Report is ${testStatus.toUpperCase()}, BIS Certificate is ${bisStatus.toUpperCase()}, Product Sample is ${sampleStatus.toUpperCase()}.`,
+      sourceType: 'tender-metadata',
+      summary: `MANUAL VERIFICATION REQUIRED: ${reason}`,
+      documentName: docName,
+      issuingAuthority: tender.authority,
+      tenderNumber: tender.bid?.rfsNo || tender.id,
+      verificationQuality: 'UNABLE_TO_VERIFY',
     }
   }
 
   try {
-    const res = await fetch('/api/ai-check-sample-requirements', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        tenderId: tender.id,
-        tenderTitle: tender.title,
-        authority: tender.authority,
-        tenderNumber: tender.bid?.rfsNo || tender.id,
-        bid: tender.bid,
-        pdfDataUrl: tender.tenderDoc?.dataUrl,
-        corrigenda: tender.corrigenda,
-      }),
-    })
+    // Read (index) this tender's own document + corrigenda first: text, OCR, Vision, embeddings.
+    const indexed = await indexTenderDocuments(tender, onProgress)
+    if (indexed.errors.length) console.warn('Tender document indexing problems:', indexed.errors)
+
+    const call = () =>
+      fetch('/api/ai-check-sample-requirements', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tenderId: tender.id,
+          tenderTitle: tender.title,
+          authority: tender.authority,
+          tenderNumber: tender.bid?.rfsNo || tender.id,
+          bid: tender.bid,
+          pdfDataUrl: pdfUrl,
+          corrigenda: tender.corrigenda,
+          customDocumentName: docName,
+        }),
+      })
+    let res = await call()
+    // 409 = the server is still reading a long document; retry a few times
+    for (let i = 0; res.status === 409 && i < 5; i++) {
+      onProgress?.('Tender document is still being read…')
+      res = await call()
+    }
 
     if (!res.ok) {
       console.warn('ai-check-sample-requirements returned status', res.status)
-      return buildDefaultAudit()
+      return buildUnverifiedAudit(`Requirement check failed (HTTP ${res.status}). Please retry.`)
     }
 
     const json = await res.json()
     if (json.success && json.audit) {
+      // Return the real result as-is, including honest UNCLEAR / manual-verification answers.
       return json.audit as SampleRequirementsAudit
     }
 
-    return buildDefaultAudit()
-  } catch (err) {
-    console.warn('Failed to call ai-check-sample-requirements, using heuristic:', err)
-    return buildDefaultAudit()
+    return buildUnverifiedAudit(json?.error || 'Requirement check returned no result.')
+  } catch (err: any) {
+    console.warn('Failed to call ai-check-sample-requirements:', err)
+    return buildUnverifiedAudit(`Requirement check could not be reached (${err?.message || 'network error'}).`)
   }
 }

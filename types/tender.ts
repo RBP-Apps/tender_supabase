@@ -64,27 +64,88 @@ export interface SampleDocumentItem {
   matchConfidence?: 'high' | 'medium' | 'low'
   letterContent?: any
   textContent?: string
-  requirementStatus?: 'Required' | 'Not Required' | 'Optional'
+  requirementStatus?: 'Required' | 'Not Required' | 'Optional' | MasterRequirementStatus
   requirementReason?: string
   requirementClause?: string
+  originalDocumentEvidence?: string
+  pageNumber?: number | string
+  verificationStatus?: string
+}
+
+export type MasterRequirementStatus =
+  | 'MANDATORY'
+  | 'OPTIONAL'
+  | 'NOT REQUIRED'
+  | 'CONDITIONAL'
+  | 'UNCLEAR'
+  | 'DOCUMENT INCOMPLETE'
+  | 'MANUAL VERIFICATION REQUIRED'
+
+export type RequirementVerificationStatus =
+  | 'VERIFIED_FROM_DOCUMENT'
+  | 'NOT_AVAILABLE'
+  | 'UNABLE_TO_VERIFY'
+  | 'PARTIALLY_VERIFIED'
+
+export interface SampleOtherDocumentRequirement {
+  sNo: number
+  documentName: string
+  requirement: string // 'Mandatory' | 'Required' | 'Dealer/Distributor ke liye' | 'Manufacturer ke liye' | string
+  clauseOrSection?: string
+  pageNumber?: string
+  description?: string
+  attachedDocId?: string
+  attachedDocName?: string
+  /** Verbatim tender text demanding this document */
+  evidenceQuote?: string
+  /** True when evidenceQuote was found on the cited page of THIS tender's document */
+  quoteVerified?: boolean
 }
 
 export interface FieldRequirementAudit {
   isRequired: boolean
-  status: 'Required' | 'Not Required' | 'Optional'
+  status: 'Required' | 'Not Required' | 'Optional' | MasterRequirementStatus
+  masterStatus?: MasterRequirementStatus
   clauseOrRef: string
   reasoning: string
   applicableStandards: string[]
-  confidence: 'high' | 'medium'
+  confidence: 'high' | 'medium' | 'low'
+  // Master System Prompt fields:
+  documentName?: string
+  questionOrRequirement?: string
+  finalAnswer?: string
+  originalDocumentEvidence?: string // exact verbatim quote or "NOT AVAILABLE IN THE PROVIDED DOCUMENT."
+  pageNumber?: number | string // physical PDF page number
+  printedPageNumber?: string
+  clauseOrSection?: string
+  detailedExplanation?: string
+  missingInformation?: string
+  verificationStatus?: RequirementVerificationStatus | string
+  finalRecommendation?: string
+  // Rich Requirement Analysis additions:
+  bulletPoints?: string[]
+  importantNotes?: string[]
+  corrigendumNote?: string
+  requiredDocumentSummary?: string
 }
 
 export interface SampleRequirementsAudit {
+  mafLetter?: FieldRequirementAudit
   testReport: FieldRequirementAudit
   bisCertificate: FieldRequirementAudit
   productSample?: FieldRequirementAudit
+  otherDocuments?: SampleOtherDocumentRequirement[]
   checkedAt?: string
   sourceType?: 'tender-pdf' | 'tender-metadata' | 'heuristic'
   summary?: string
+  documentName?: string
+  totalPagesAnalyzed?: number
+  issuingAuthority?: string
+  tenderNumber?: string
+  verificationQuality?: 'HIGH_CONFIDENCE_GROUNDED' | 'HEURISTIC_FALLBACK' | 'OCR_GROUNDED' | 'UNABLE_TO_VERIFY'
+  /** What was actually read (pages, OCR / Vision pages, unreadable pages) */
+  evidenceStatus?: string
+  evidenceWarnings?: string[]
 }
 
 export interface SampleDetailsHistoryEntry {
@@ -117,12 +178,14 @@ export interface SampleDetailsData {
 }
 
 export interface EligibilityDocument {
+  id?: string
   name: string
   size?: number
   type?: string
   uploadedAt: string
   dataUrl?: string
   letterContent?: any
+  referenceNote?: string
 }
 
 export interface CriteriaEvaluationDetail {
@@ -133,10 +196,30 @@ export interface CriteriaEvaluationDetail {
   comparisonResult: string
   rejectionReason?: string
   isMandatory: boolean
+  /** Physical PDF page of the tender clause (from the tender document) */
+  tenderSourcePage?: string
+  /** Verbatim quote of the tender clause */
+  tenderSourceQuote?: string
+  /** Whether the quote was found verbatim in the extracted tender text */
+  tenderQuoteVerified?: boolean
+  /** What the evidence situation is for this criterion */
+  evidenceSituation?:
+    | 'requirement-not-in-tender'
+    | 'document-not-uploaded'
+    | 'document-unreadable'
+    | 'requirement-not-satisfied'
+    | 'requirement-satisfied'
+    | 'needs-manual-review'
 }
 
 export interface AIEligibilityVerification {
-  status: 'Eligible' | 'Not Eligible' | 'Partially Eligible'
+  status: 'Eligible' | 'Not Eligible' | 'Partially Eligible' | 'Insufficient Information'
+  /** How the tender and each bidder document were actually read */
+  evidenceAudit?: {
+    tenderDocument: string
+    submittedDocuments: Array<{ slot: string; name?: string; situation: string; pagesRead?: number }>
+    warnings: string[]
+  }
   verifiedAt: string
   score: number // e.g. 100, 80, 40
   summary: string
@@ -173,14 +256,30 @@ export interface AIEligibilityVerification {
   }
 }
 
+export interface EligibilityChecklistItem {
+  sNo: number
+  documentName: string
+  requirement: 'MANDATORY' | 'REQUIRED' | 'CONDITIONAL'
+  clauseOrSection: string
+  pageNumber: string
+  description: string
+  matchingCompanyDocKey?: 'networthDoc' | 'turnoverDoc' | 'experienceDoc' | null
+  /** Verbatim tender text demanding this document */
+  evidenceQuote?: string
+  /** True when the quote was found on the cited page of THIS tender's document */
+  quoteVerified?: boolean
+}
+
 export interface EligibilityCheckData {
   turnoverDoc?: EligibilityDocument | null
   experienceDoc?: EligibilityDocument | null
   vendorRegDoc?: EligibilityDocument | null
   otherDoc?: EligibilityDocument | null
+  otherDocs?: EligibilityDocument[]
   remarks?: string
   completedAt?: string
   aiVerification?: AIEligibilityVerification
+  checklistItems?: EligibilityChecklistItem[]
 }
 
 export interface CompanyDocumentItem {
@@ -210,6 +309,34 @@ export interface BankAccountDetails {
   branch?: string
 }
 
+export interface EmdGeneratedDocumentInfo {
+  formatTitle: string
+  formatSource?: string
+  formatType?: 'rtgs_neft' | 'bank_guarantee' | 'demand_draft' | 'portal_challan' | 'custom_undertaking'
+  docxFileName: string
+  docxDataUrl?: string
+  pdfFileName: string
+  pdfDataUrl?: string
+  status: 'Not Generated' | 'Generated' | 'Modified' | 'Saved' | 'PDF Ready'
+  version: number
+  generatedAt: string
+  lastModifiedAt?: string
+  lastSavedAt?: string
+  // Editable Document Payload
+  subject: string
+  addressee: string
+  authorityAddress: string
+  tenderRefNo: string
+  workName: string
+  amountInWords?: string
+  declarations: string[]
+  paymentTerms: string[]
+  signatoryName: string
+  signatoryDesignation: string
+  customNotes?: string
+  textContent?: string
+}
+
 export interface EmdReadyHistoryEntry {
   id: string
   submittedAt: string
@@ -221,6 +348,7 @@ export interface EmdReadyHistoryEntry {
   utrNumber: string
   date: string
   remarks?: string
+  generatedDocument?: EmdGeneratedDocumentInfo
 }
 
 export interface EmdReadyData {
@@ -234,6 +362,7 @@ export interface EmdReadyData {
   completedAt?: string
   completedBy?: string
   history?: EmdReadyHistoryEntry[]
+  generatedDocument?: EmdGeneratedDocumentInfo
 }
 
 export interface PortalUploadDocumentItem {

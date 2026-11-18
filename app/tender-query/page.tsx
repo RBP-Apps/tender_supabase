@@ -31,9 +31,12 @@ import {
   MessageSquare,
   Plus,
 } from 'lucide-react'
+import { useSearchParams } from 'next/navigation'
 import { useTenders } from '@/context/TenderContext'
 import { MarkdownContent } from '@/components/chat/MarkdownContent'
 import { parseFileForChat, ParsedFileInfo, formatFileSize } from '@/lib/document-parser'
+import { parseTextOrCsvDocument } from '@/lib/universal-document-parser'
+import { SampleDocumentItem } from '@/types/tender'
 import { FileAttachmentPill } from '@/components/chat/FileAttachmentPill'
 import {
   DownloadableFileCard,
@@ -57,6 +60,7 @@ import {
 } from '@/lib/chat-history-service'
 import { ChatHistorySidebar } from '@/components/chat/ChatHistorySidebar'
 import { sanitizeTenderForAI } from '@/lib/tender-ai-context'
+import { indexDocument } from '@/lib/document-index-client'
 
 const SUGGESTED_QUESTIONS = [
   {
@@ -101,8 +105,37 @@ const SUGGESTED_QUESTIONS = [
   },
 ]
 
-export default function TenderQueryPage() {
+/**
+ * Stored tender documents are uploaded to Supabase Storage on save, so their
+ * `dataUrl` is usually an https URL, not base64. The old code ran atob() on the
+ * URL and failed, so the saved NIT PDF could never be attached to the chat.
+ */
+async function storedDocToFile(dataUrl: string, filename: string): Promise<File> {
+  if (/^https?:\/\//i.test(dataUrl)) {
+    const res = await fetch(dataUrl)
+    if (!res.ok) throw new Error(`Could not download stored document (HTTP ${res.status}).`)
+    const blob = await res.blob()
+    return new File([blob], filename, { type: blob.type || 'application/pdf' })
+  }
+  return dataUrlToFile(dataUrl, filename)
+}
+
+function dataUrlToFile(dataUrl: string, filename: string): File {
+  const parts = dataUrl.split(',')
+  const mime = parts[0].match(/:(.*?);/)?.[1] || 'application/pdf'
+  const binary = atob(parts[1])
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i)
+  }
+  const blob = new Blob([bytes], { type: mime })
+  return new File([blob], filename, { type: mime })
+}
+
+function TenderQueryContent() {
   const { tenders, supabaseConnected } = useTenders()
+  const searchParams = useSearchParams()
+  const tenderIdFromUrl = searchParams.get('tenderId')
 
   // 1. CONVERSATIONS & CHAT HISTORY STATE
   const [conversations, setConversations] = useState<ChatConversation[]>([])
@@ -113,10 +146,22 @@ export default function TenderQueryPage() {
   // Input & Messaging state
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
-  const [selectedTenderId, setSelectedTenderId] = useState<string>('all')
+  const [selectedTenderId, setSelectedTenderId] = useState<string>(tenderIdFromUrl || 'all')
   const [showClearModal, setShowClearModal] = useState(false)
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const [exportingId, setExportingId] = useState<string | null>(null)
+
+  // Sync with tenderId in URL
+  useEffect(() => {
+    if (tenderIdFromUrl && tenders.length > 0) {
+      const matched = tenders.find(
+        t => t.id.toLowerCase() === tenderIdFromUrl.toLowerCase()
+      )
+      if (matched && selectedTenderId !== matched.id) {
+        setSelectedTenderId(matched.id)
+      }
+    }
+  }, [tenderIdFromUrl, tenders, selectedTenderId])
 
   // Attachment state
   const [attachedFiles, setAttachedFiles] = useState<ParsedFileInfo[]>([])
@@ -182,12 +227,70 @@ export default function TenderQueryPage() {
     }
   }
 
+  // Server-side indexing (pdf.js → OCR eng+hin → OpenAI Vision → embeddings).
+  // Returns null when indexing is not possible, so the caller can fall back.
+  const indexPdfForChat = async (
+    name: string,
+    size: number,
+    source: string,
+    role: 'chat' | 'tender' | 'corrigendum',
+    scopeId: string
+  ): Promise<{ parsed: ParsedFileInfo | null; error?: string }> => {
+    const r = await indexDocument({
+      tenderId: scopeId,
+      role,
+      docName: name,
+      source,
+      onProgress: (done, total) =>
+        setProcessingProgress({
+          stage: 'processing_pages',
+          stageLabel: 'Reading document (text, OCR, Vision)',
+          current: done,
+          total,
+          percent: total ? Math.round((done / total) * 100) : 10,
+          message: `Read ${done} of ${total || '?'} pages…`,
+        }),
+    })
+    if (!r.ok) return { parsed: null, error: r.error }
+    const parts = [`${r.pagesDone}/${r.pageCount} pages read`]
+    if (r.ocrPages.length) parts.push(`OCR on ${r.ocrPages.length} page(s)`)
+    if (r.visionPages.length) parts.push(`Vision on ${r.visionPages.length} page(s)`)
+    if (r.unreadablePages.length) parts.push(`UNREADABLE: p.${r.unreadablePages.join(', ')}`)
+    const summary = parts.join(' • ')
+    if (r.warnings.length) console.warn(`Indexing notes for ${name}:`, r.warnings)
+    return {
+      parsed: {
+        name,
+        type: 'application/pdf',
+        size,
+        extractedText: '',
+        pageCount: r.pageCount,
+        previewText: summary,
+        indexSummary: summary,
+        indexId: r.persisted && r.indexId ? r.indexId : undefined,
+        indexScopeId: r.persisted ? scopeId : undefined,
+        // not persisted (database migration missing): keep the server-extracted pages locally
+        chunks: r.persisted ? undefined : r.chunks,
+      },
+      error: r.persisted ? undefined : r.warnings.find(w => /migration|NOT saved/i.test(w)),
+    }
+  }
+
+  const fileToDataUrl = (file: File) =>
+    new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(reader.result as string)
+      reader.onerror = () => reject(new Error('Could not read file'))
+      reader.readAsDataURL(file)
+    })
+
   // 1. FILE UPLOAD & PARSING HANDLER
   const handleFilesSelect = async (files: FileList | File[]) => {
     if (!files || files.length === 0) return
     setIsParsingFiles(true)
 
     const parsedResults: ParsedFileInfo[] = []
+    const scopeId = selectedTenderId !== 'all' ? selectedTenderId : `chat:${activeConversationId || 'default'}`
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i]
@@ -197,12 +300,23 @@ export default function TenderQueryPage() {
       }
       setProcessingFileName(file.name)
       try {
+        const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
+        if (isPdf) {
+          const { parsed, error } = await indexPdfForChat(file.name, file.size, await fileToDataUrl(file), 'chat', scopeId)
+          if (parsed) {
+            if (error) alert(`"${file.name}": ${error}`)
+            parsedResults.push(parsed)
+            continue
+          }
+          alert(`Server document reading failed for "${file.name}" (${error || 'unknown error'}). Falling back to in-browser reading, which is less accurate for scanned pages and tables.`)
+        }
         const parsed = await parseFileForChat(file, progress => {
           setProcessingProgress(progress)
         })
         parsedResults.push(parsed)
-      } catch (err) {
+      } catch (err: any) {
         console.error('File parsing error:', err)
+        alert(`Could not read "${file.name}": ${err?.message || 'error'}`)
       }
     }
 
@@ -212,6 +326,59 @@ export default function TenderQueryPage() {
     setProcessingFileName('')
     if (fileInputRef.current) {
       fileInputRef.current.value = ''
+    }
+  }
+
+  // 1b. ATTACH PRE-SAVED TENDER DOCUMENT (e.g. NIT PDF or Corrigendum)
+  const handleAttachTenderDoc = async (doc: SampleDocumentItem) => {
+    if (!doc.dataUrl && !doc.textContent) {
+      alert('Document content is not available on this record.')
+      return
+    }
+    setIsParsingFiles(true)
+    setProcessingFileName(doc.name)
+    try {
+      let parsed: ParsedFileInfo | null = null
+      const isPdf = (doc.type || '').includes('pdf') || doc.name.toLowerCase().endsWith('.pdf')
+      if (doc.dataUrl && isPdf && selectedTenderId !== 'all') {
+        // Indexed under THIS tender (role "tender") so Eligibility / Sample Details reuse it.
+        const r = await indexPdfForChat(doc.name, doc.size || 0, doc.dataUrl, 'tender', selectedTenderId)
+        parsed = r.parsed
+        if (!parsed) {
+          alert(`Server document reading failed for "${doc.name}" (${r.error || 'unknown error'}). Falling back to in-browser reading.`)
+        } else if (r.error) {
+          alert(`"${doc.name}": ${r.error}`)
+        }
+      }
+      if (!parsed && doc.dataUrl) {
+        const file = await storedDocToFile(doc.dataUrl, doc.name)
+        parsed = await parseFileForChat(file, progress => {
+          setProcessingProgress(progress)
+        })
+      } else if (!parsed) {
+        const result = await parseTextOrCsvDocument(
+          doc.textContent || '',
+          doc.name,
+          doc.name.toLowerCase().endsWith('.csv')
+        )
+        parsed = {
+          name: doc.name,
+          type: doc.type || 'text/plain',
+          size: doc.size || doc.textContent?.length || 0,
+          extractedText: result.extractedText,
+          chunks: result.chunks,
+          rowCount: result.rowCount,
+        }
+      }
+      const finalParsed = parsed
+      setAttachedFiles(prev => [...prev.filter(f => f.name !== doc.name), finalParsed])
+    } catch (err: any) {
+      console.error('Error attaching tender doc:', err)
+      alert(`Could not attach document: ${err?.message || 'Error'}`)
+    } finally {
+      setIsParsingFiles(false)
+      setProcessingProgress(null)
+      setProcessingFileName('')
     }
   }
 
@@ -420,6 +587,18 @@ export default function TenderQueryPage() {
 
     const currentFiles = [...attachedFiles]
 
+    // Documents attached earlier in THIS conversation must be re-sent on every
+    // turn; previously only the turn that attached them carried the document,
+    // so follow-up questions were answered with no document text at all.
+    const conversationDocsByName = new Map<string, ParsedFileInfo>()
+    for (const m of messages) {
+      for (const f of m.attachedFiles || []) {
+        if (f.indexId || (f.chunks && f.chunks.length > 0) || f.extractedText) conversationDocsByName.set(f.name, f)
+      }
+    }
+    for (const f of currentFiles) conversationDocsByName.set(f.name, f)
+    const filesForQuery = Array.from(conversationDocsByName.values())
+
     const userMessage: ChatMessage = {
       id: `user-${Date.now()}`,
       role: 'user',
@@ -493,7 +672,7 @@ export default function TenderQueryPage() {
             remarks: t.remarks,
           })),
           currentTender: currentTender ? sanitizeTenderForAI(currentTender) : undefined,
-          files: currentFiles.map(f => ({
+          files: filesForQuery.map(f => ({
             name: f.name,
             type: f.type,
             size: f.size,
@@ -504,7 +683,12 @@ export default function TenderQueryPage() {
             sheetCount: f.sheetCount,
             rowCount: f.rowCount,
             isScanned: f.isScanned,
-            chunks: f.chunks,
+            // indexed PDFs: only the index reference travels; the server loads the pages
+            chunks: f.indexId ? undefined : f.chunks,
+            indexId: f.indexId,
+            indexScopeId: f.indexScopeId,
+            executiveSummary: f.executiveSummary,
+            documentMap: f.documentMap,
           })),
         }),
       })
@@ -998,25 +1182,46 @@ export default function TenderQueryPage() {
               }}
               className="relative flex flex-col bg-white rounded-xl border border-slate-300/80 shadow-xs focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-500/20 transition-all overflow-hidden"
             >
-              {selectedTenderId !== 'all' && (
-                <div className="flex items-center justify-between px-3 py-1.5 text-[11px] bg-blue-50 border-b border-blue-100 text-blue-900">
-                  <div className="flex items-center gap-1.5 truncate">
-                    <span className="w-1.5 h-1.5 rounded-full bg-blue-600 animate-pulse flex-shrink-0" />
-                    <span className="font-semibold text-blue-700">Scoped Tender:</span>
-                    <span className="font-medium text-slate-800 truncate">
-                      {selectedTenderId} — {tenders.find(t => t.id === selectedTenderId)?.title || 'Selected Tender'}
-                    </span>
+              {selectedTenderId !== 'all' && (() => {
+                const activeT = tenders.find(t => t.id === selectedTenderId)
+                const hasDocToAttach =
+                  activeT?.tenderDoc &&
+                  !attachedFiles.some(f => f.name === activeT.tenderDoc?.name)
+
+                return (
+                  <div className="flex items-center justify-between px-3 py-1.5 text-[11px] bg-blue-50 border-b border-blue-100 text-blue-900 gap-2">
+                    <div className="flex items-center gap-1.5 truncate">
+                      <span className="w-1.5 h-1.5 rounded-full bg-blue-600 animate-pulse flex-shrink-0" />
+                      <span className="font-semibold text-blue-700">Scoped Tender:</span>
+                      <span className="font-medium text-slate-800 truncate">
+                        {selectedTenderId} — {activeT?.title || 'Selected Tender'}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      {hasDocToAttach && activeT?.tenderDoc && (
+                        <button
+                          type="button"
+                          onClick={() => handleAttachTenderDoc(activeT.tenderDoc!)}
+                          disabled={isParsingFiles}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-blue-600 hover:bg-blue-700 text-white font-medium text-[10px] transition-colors shadow-2xs cursor-pointer"
+                          title="Attach this tender's official document to chat and run deep AI analysis"
+                        >
+                          <Paperclip className="w-2.5 h-2.5" />
+                          <span>Attach Document</span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setSelectedTenderId('all')}
+                        className="text-slate-400 hover:text-red-600 text-[11px] font-semibold flex-shrink-0 cursor-pointer"
+                        title="Switch back to All Live Tenders"
+                      >
+                        ✕ Reset
+                      </button>
+                    </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedTenderId('all')}
-                    className="ml-2 text-slate-400 hover:text-red-600 text-[11px] font-semibold flex-shrink-0 cursor-pointer"
-                    title="Switch back to All Live Tenders"
-                  >
-                    ✕ Reset
-                  </button>
-                </div>
-              )}
+                )
+              })()}
 
               <div className="flex items-start gap-1 p-2">
                 {/* Paperclip Button */}
@@ -1115,5 +1320,22 @@ export default function TenderQueryPage() {
         </div>
       )}
     </section>
+  )
+}
+
+export default function TenderQueryPage() {
+  return (
+    <React.Suspense
+      fallback={
+        <div className="flex h-screen items-center justify-center bg-slate-50">
+          <div className="flex items-center gap-2 text-slate-500 text-sm">
+            <Loader2 className="w-5 h-5 animate-spin text-blue-600" />
+            <span>Loading Tender Query...</span>
+          </div>
+        </div>
+      }
+    >
+      <TenderQueryContent />
+    </React.Suspense>
   )
 }

@@ -337,7 +337,17 @@ export default function DocumentReadyPage() {
                       {/* 5. EMD Payment Proof */}
                       <td>
                         <div className="min-w-[140px] max-w-[200px]">
-                          {emd?.utrNumber ? (
+                          {emd?.generatedDocument ? (
+                            <div className="flex flex-col gap-1">
+                              <span className="font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded text-[11px] whitespace-nowrap w-fit flex items-center gap-1">
+                                <FileCheck2 className="w-3 h-3 text-indigo-600" />
+                                EMD PDF (v{emd.generatedDocument.version || 1})
+                              </span>
+                              <small className="text-slate-500 text-[10.5px] font-medium block">
+                                {emd.amount ? `₹ ${emd.amount}` : 'EMD Generated'} {emd.utrNumber ? `· UTR: ${emd.utrNumber}` : '· Stored in DB'}
+                              </small>
+                            </div>
+                          ) : emd?.utrNumber ? (
                             <div className="flex flex-col gap-0.5">
                               <span className="font-mono font-semibold text-purple-700 bg-purple-50 border border-purple-200 px-2 py-0.5 rounded text-xs whitespace-nowrap w-fit">
                                 UTR: {emd.utrNumber}

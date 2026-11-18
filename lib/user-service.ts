@@ -1,5 +1,6 @@
 import { supabase } from '@/lib/supabaseClient'
 import { AppUser, APP_MODULES } from '@/types/user'
+import { Masters, Tender } from '@/types/tender'
 import { hashPassword, verifyPassword, extractPasswordInfo, encodeStoredPassword } from '@/lib/auth-crypto'
 
 export const ALL_PAGE_PATHS = APP_MODULES.map(m => m.path)
@@ -13,7 +14,14 @@ export const DEFAULT_USERS: AppUser[] = []
 export function clearAllLocalApplicationStorage(): void {
   if (typeof window === 'undefined') return
   try {
-    const EXEMPT_KEYS = ['tender_fms_company_docs_vault']
+    const EXEMPT_KEYS = [
+      'tender_fms_company_docs_vault',
+      'tender_fms_session_user',
+      'tender_fms_session_user_id',
+      'tender_fms_cached_tenders',
+      'tender_fms_cached_masters',
+      'tender_fms_sidebar_collapsed',
+    ]
     const keysToRemove: string[] = [
       'tender-fms-state-v2',
       'tender-fms-state',
@@ -21,7 +29,6 @@ export function clearAllLocalApplicationStorage(): void {
       'tender_fms_current_user_v1',
       'tender_fms_chat_history_v1',
       'tender_fms_chat_active_conv_v1',
-      'tender_fms_sidebar_collapsed',
     ]
 
     for (let i = 0; i < window.localStorage.length; i++) {
@@ -52,7 +59,7 @@ export function clearAllLocalApplicationStorage(): void {
 }
 
 /**
- * Lightweight per-tab session helpers (No application data stored)
+ * Lightweight per-tab session helpers (Instant auth & data hydration without refresh delay)
  */
 export function getSessionUserId(): string | null {
   if (typeof window === 'undefined') return null
@@ -70,10 +77,63 @@ export function setSessionUserId(id: string): void {
   } catch {}
 }
 
+export function getSessionUser(): AppUser | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.sessionStorage.getItem('tender_fms_session_user')
+    return raw ? JSON.parse(raw) : null
+  } catch {
+    return null
+  }
+}
+
+export function setSessionUser(user: AppUser): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.sessionStorage.setItem('tender_fms_session_user_id', user.id)
+    window.sessionStorage.setItem('tender_fms_session_user', JSON.stringify(user))
+  } catch {}
+}
+
 export function clearSessionUser(): void {
   if (typeof window === 'undefined') return
   try {
     window.sessionStorage.removeItem('tender_fms_session_user_id')
+    window.sessionStorage.removeItem('tender_fms_session_user')
+  } catch {}
+}
+
+export function getCachedTenders(): Tender[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = window.sessionStorage.getItem('tender_fms_cached_tenders')
+    return raw ? JSON.parse(raw) : []
+  } catch {
+    return []
+  }
+}
+
+export function setCachedTenders(tenders: Tender[]): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.sessionStorage.setItem('tender_fms_cached_tenders', JSON.stringify(tenders))
+  } catch {}
+}
+
+export function getCachedMasters(): Masters | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.sessionStorage.getItem('tender_fms_cached_masters')
+    return raw ? JSON.parse(raw) : null
+  } catch {
+    return null
+  }
+}
+
+export function setCachedMasters(masters: Masters): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.sessionStorage.setItem('tender_fms_cached_masters', JSON.stringify(masters))
   } catch {}
 }
 

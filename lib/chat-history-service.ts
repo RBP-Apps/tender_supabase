@@ -16,6 +16,7 @@ export interface ChatMessage {
   generatedFiles?: DownloadableFileInfo[]
   sources?: DocumentSourceCitation[]
   verification?: {
+    status?: 'verified' | 'verified-scanned' | 'not-verified' | 'evidence-not-found' | 'extraction-incomplete'
     confidence: string
     isVerified: boolean
     auditNotes?: string

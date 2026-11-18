@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import {
   ArrowRight,
+  Bot,
   CheckCircle2,
   Clock,
   Clock3,
@@ -15,6 +16,7 @@ import {
   History,
   Pencil,
   Search,
+  Sparkles,
 } from 'lucide-react'
 import { useTenders } from '@/context/TenderContext'
 import { SampleDocumentItem, Status, Tender } from '@/types/tender'
@@ -96,17 +98,32 @@ function renderSampleDocCell(
     productSample: 'Auto-generated Product Sample Challan',
   }
 
+  const reqStatus =
+    doc?.requirementStatus ||
+    (fieldKey === 'mafLetter'
+      ? tender?.sampleDetails?.aiRequirementsAudit?.mafLetter?.masterStatus || tender?.sampleDetails?.aiRequirementsAudit?.mafLetter?.status
+      : fieldKey === 'testReport'
+      ? tender?.sampleDetails?.aiRequirementsAudit?.testReport?.masterStatus || tender?.sampleDetails?.aiRequirementsAudit?.testReport?.status
+      : fieldKey === 'bisCertificate'
+      ? tender?.sampleDetails?.aiRequirementsAudit?.bisCertificate?.masterStatus || tender?.sampleDetails?.aiRequirementsAudit?.bisCertificate?.status
+      : fieldKey === 'productSample'
+      ? tender?.sampleDetails?.aiRequirementsAudit?.productSample?.masterStatus || tender?.sampleDetails?.aiRequirementsAudit?.productSample?.status
+      : undefined)
+
+  const isNotReq = reqStatus === 'NOT REQUIRED' || reqStatus === 'Not Required'
+
   // Synthesize auto-generated document if doc is not explicitly saved yet
   const effectiveDoc: SampleDocumentItem | null =
     doc ||
     (tender && fieldKey
       ? {
           id: `${fieldKey}-${tender.id}`,
-          name: docNames[fieldKey] || `${fieldKey}.docx`,
-          type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          name: isNotReq ? 'Not Required / Not Applicable' : docNames[fieldKey] || `${fieldKey}.docx`,
+          type: isNotReq ? 'text/plain' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
           uploadedAt: tender.sampleDetails?.completedAt || new Date().toISOString(),
           source: 'auto-fetched',
-          referenceNote: docNotes[fieldKey],
+          referenceNote: isNotReq ? 'Not Required by Tender Document' : docNotes[fieldKey],
+          requirementStatus: reqStatus,
         }
       : null)
 
@@ -116,21 +133,11 @@ function renderSampleDocCell(
 
   const handlePreviewDoc = () => {
     if (!effectiveDoc.textContent && tender && fieldKey) {
-      const contents = generateSampleFieldContents(tender, null)
+      const contents = generateSampleFieldContents(tender, null, tender.sampleDetails?.aiRequirementsAudit)
       effectiveDoc.textContent = contents[fieldKey]?.textContent
     }
     onPreview?.(effectiveDoc)
   }
-
-  const reqStatus =
-    effectiveDoc.requirementStatus ||
-    (fieldKey === 'testReport'
-      ? tender?.sampleDetails?.aiRequirementsAudit?.testReport?.status
-      : fieldKey === 'bisCertificate'
-      ? tender?.sampleDetails?.aiRequirementsAudit?.bisCertificate?.status
-      : fieldKey === 'productSample'
-      ? tender?.sampleDetails?.aiRequirementsAudit?.productSample?.status
-      : undefined)
 
   return (
     <div className="flex flex-col gap-1 min-w-[130px] max-w-[200px]">
@@ -148,14 +155,26 @@ function renderSampleDocCell(
         {reqStatus ? (
           <span
             className={`px-1.5 py-0.2 rounded font-extrabold text-[9px] shadow-2xs ${
-              reqStatus === 'Required'
+              reqStatus === 'Required' || reqStatus === 'MANDATORY'
                 ? 'bg-rose-50 text-rose-700 border border-rose-200'
-                : reqStatus === 'Not Required'
+                : reqStatus === 'Not Required' || reqStatus === 'NOT REQUIRED'
                 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                : 'bg-amber-50 text-amber-700 border border-amber-200'
+                : reqStatus === 'CONDITIONAL'
+                ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                : reqStatus === 'UNCLEAR'
+                ? 'bg-purple-50 text-purple-700 border border-purple-200'
+                : 'bg-slate-100 text-slate-700 border border-slate-200'
             }`}
           >
-            {reqStatus === 'Required' ? '🔴 Mandatory' : '🟢 Not Required'}
+            {reqStatus === 'Required' || reqStatus === 'MANDATORY'
+              ? '🔴 Mandatory'
+              : reqStatus === 'Not Required' || reqStatus === 'NOT REQUIRED'
+              ? '🟢 Not Required'
+              : reqStatus === 'CONDITIONAL'
+              ? '🟡 Conditional'
+              : reqStatus === 'UNCLEAR'
+              ? '🟣 Unclear'
+              : '⚪ Incomplete'}
           </span>
         ) : null}
         {effectiveDoc.source === 'auto-fetched' || effectiveDoc.source === 'eligibility-docs' ? (
@@ -283,6 +302,14 @@ export default function SampleDetailsPage() {
           </p>
         </div>
         <div className="flex items-center gap-3">
+          <Link
+            href="/tender-query"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-semibold text-xs shadow-xs hover:from-blue-700 hover:to-indigo-700 transition-all"
+            title="Ask Universal AI questions regarding tender documents, technical compliance, and sample requirements"
+          >
+            <Bot className="w-3.5 h-3.5" />
+            <span>Ask AI About Documents</span>
+          </Link>
           <Link href="/eligibility-check" className="secondary-button text-xs">
             Previous: Eligibility Check
           </Link>
@@ -413,6 +440,15 @@ export default function SampleDetailsPage() {
                           title="View auto-filled bid documents"
                         >
                           <FileText />
+                        </Link>
+
+                        {/* Ask AI about this tender & documents */}
+                        <Link
+                          href={`/tender-query?tenderId=${encodeURIComponent(t.id)}`}
+                          className="icon-action text-indigo-600 hover:text-indigo-800"
+                          title="Ask Universal AI about this tender and its documents"
+                        >
+                          <Bot />
                         </Link>
                       </div>
                     </td>

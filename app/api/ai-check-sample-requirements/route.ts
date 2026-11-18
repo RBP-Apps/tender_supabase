@@ -2,468 +2,484 @@ import { NextResponse } from 'next/server'
 import { createOpenAI } from '@ai-sdk/openai'
 import { generateText, Output } from 'ai'
 import { z } from 'zod'
-import fs from 'node:fs'
-import path from 'node:path'
-import { pathToFileURL } from 'node:url'
-import { FieldRequirementAudit, SampleRequirementsAudit, TechnicalComponent, TenderBidDetails } from '@/types/tender'
+import { loadTenderEvidence, hybridRetrieve } from '@/lib/tender-evidence'
+import { quoteOnPage } from '@/lib/document-verifier'
+import { UsageTracker } from '@/lib/ai-usage'
+import { DocumentPageChunk } from '@/types/document-understanding'
+import {
+  FieldRequirementAudit,
+  MasterRequirementStatus,
+  RequirementVerificationStatus,
+  SampleRequirementsAudit,
+  TechnicalComponent,
+  TenderBidDetails,
+} from '@/types/tender'
 
 export const runtime = 'nodejs'
-export const maxDuration = 90
+export const maxDuration = 300
 
-const sampleRequirementsSchema = z.object({
-  testReport: z.object({
-    isRequired: z.boolean().describe('True if tender document explicitly mandates/requires Test Report submission, false if not required or optional'),
-    status: z.enum(['Required', 'Not Required', 'Optional']),
-    clauseOrRef: z.string().describe('Exact clause number, section, page number or reference in the tender document (e.g. "Clause 4.3 (Page 24) - Technical Criteria", or "Not Specified in Tender Document")'),
-    reasoning: z.string().describe('Precise explanation based strictly on tender document stating why Test Report is Required, Not Required, or Optional'),
-    applicableStandards: z.array(z.string()).describe('List of standards or lab accreditations mentioned (e.g., NABL, ERDA, CPRI, IS 14286, IEC 61215), or empty array'),
-    confidence: z.enum(['high', 'medium']),
-  }),
-  bisCertificate: z.object({
-    isRequired: z.boolean().describe('True if tender document explicitly mandates/requires BIS / CRS Certificate submission, false if not required or optional'),
-    status: z.enum(['Required', 'Not Required', 'Optional']),
-    clauseOrRef: z.string().describe('Exact clause number, section, page number or reference in the tender document (e.g. "Clause 5.1 (Page 31) - BIS / CRS Requirement", or "Not Specified in Tender Document")'),
-    reasoning: z.string().describe('Precise explanation based strictly on tender document stating why BIS Certificate is Required, Not Required, or Optional'),
-    applicableStandards: z.array(z.string()).describe('List of BIS standards mentioned (e.g., IS 14286, IS 16221, BIS CRS Scheme), or empty array'),
-    confidence: z.enum(['high', 'medium']),
-  }),
-  productSample: z.object({
-    isRequired: z.boolean().describe('True if tender document explicitly mandates/requires physical product sample submission, false if not required or optional'),
-    status: z.enum(['Required', 'Not Required', 'Optional']),
-    clauseOrRef: z.string().describe('Exact clause number, section, page number or reference in the tender document (e.g. "Clause 5.4 - Physical Sample Submission", or "Not Specified in Tender Document")'),
-    reasoning: z.string().describe('Precise explanation based strictly on tender document stating why physical Product Sample is Required, Not Required, or Optional'),
-    applicableStandards: z.array(z.string()).describe('List of sample details, prototype specifications or testing cell location, or empty array'),
-    confidence: z.enum(['high', 'medium']),
-  }),
-  summary: z.string().describe('Overall summary statement of AI analysis for Test Report, BIS Certificate, and Product Sample requirement'),
+/**
+ * Master System Prompt Document Item Schema
+ * Conforms to Section 10 of the Master System Prompt
+ */
+const masterRequirementItemSchema = z.object({
+  isRequired: z
+    .boolean()
+    .describe('True if tender document explicitly mandates/requires submission, false if not required or optional'),
+  status: z
+    .enum(['MANDATORY', 'OPTIONAL', 'NOT REQUIRED', 'CONDITIONAL', 'UNCLEAR', 'MANUAL VERIFICATION REQUIRED', 'DOCUMENT INCOMPLETE'])
+    .describe(
+      'Strict status: MANDATORY (explicitly required), OPTIONAL (optional), NOT REQUIRED (no requirement found), CONDITIONAL (applies under specific condition), MANUAL VERIFICATION REQUIRED (unclear/ambiguous/requires manual check), DOCUMENT INCOMPLETE'
+    ),
+  documentName: z.string().describe('Source tender document name or title'),
+  questionOrRequirement: z.string().describe('Exact question or requirement being evaluated'),
+  finalAnswer: z.string().describe('Direct, clear, concise factual answer strictly grounded in document'),
+  originalDocumentEvidence: z
+    .string()
+    .describe(
+      'Exact verbatim extract or quotation from the document. If missing, return exactly "NOT AVAILABLE IN THE PROVIDED DOCUMENT."'
+    ),
+  pageNumber: z
+    .string()
+    .describe('Physical PDF page number where evidence is found (e.g. "Page 14" or "Pages 14, 22"), or "Not Available"'),
+  clauseOrSection: z
+    .string()
+    .describe('Exact clause number and section heading, or "Not Specified in Tender Document"'),
+  detailedExplanation: z
+    .string()
+    .describe('Detailed explanation based exclusively on the original document text, without external assumptions'),
+  missingInformation: z
+    .string()
+    .describe('Details of any missing information, unreadable pages, or "None" if complete'),
+  verificationStatus: z
+    .enum(['VERIFIED_FROM_DOCUMENT', 'NOT_AVAILABLE', 'UNABLE_TO_VERIFY', 'PARTIALLY_VERIFIED'])
+    .describe('Verification status against uploaded document'),
+  finalRecommendation: z
+    .string()
+    .describe('Actionable recommendation for bidder based strictly on tender clause'),
+  applicableStandards: z
+    .array(z.string())
+    .describe('List of standards, accreditations or equipment models explicitly cited in document'),
+  confidence: z.enum(['high', 'medium', 'low']),
+  bulletPoints: z.array(z.string()).optional().describe('Clear bullet points breaking down each key condition or requirement rule for bidder'),
+  importantNotes: z.array(z.string()).optional().describe('Critical compliance warnings or consequences for non-submission'),
+  corrigendumNote: z.string().optional().describe('Corrigendum/amendment changes modifying schedule, dates, locations, or requirements'),
+  requiredDocumentSummary: z.string().optional().describe('Concise description of required document or physical item to submit'),
 })
 
-/**
- * Dynamically loads pdfjs-dist legacy build for server-side PDF extraction
- */
-async function loadPdfjs(): Promise<any> {
-  const buildDir = path.join(process.cwd(), 'node_modules', 'pdfjs-dist', 'legacy', 'build')
-  const nativeEntry = path.join(buildDir, 'pdf.mjs')
-  if (fs.existsSync(nativeEntry)) {
-    try {
-      return await import(/* webpackIgnore: true */ /* turbopackIgnore: true */ pathToFileURL(nativeEntry).href)
-    } catch (err) {
-      console.warn('Native pdf.js load failed, falling back to bundled build:', err)
-    }
-  }
-  const pdfjsLib: any = await import('pdfjs-dist/legacy/build/pdf.mjs')
-  const workerPath = [
-    path.join(buildDir, 'pdf.worker.mjs'),
-    path.join(process.cwd(), 'public', 'pdfjs', 'pdf.worker.min.mjs'),
-  ].find(p => fs.existsSync(p))
-  if (workerPath) pdfjsLib.GlobalWorkerOptions.workerSrc = pathToFileURL(workerPath).href
-  return pdfjsLib
-}
+const otherDocumentItemSchema = z.object({
+  sNo: z.number().describe('Serial number (1, 2, 3...)'),
+  documentName: z.string().describe('Name of document required (e.g. PAN Card, GST Registration, Bidder Undertaking, Non-Blacklisting Self Declaration, etc.)'),
+  requirement: z.string().describe('Requirement condition: Mandatory, Required, Dealer/Distributor ke liye, Manufacturer ke liye, or specific condition'),
+  clauseOrSection: z.string().optional().describe('Clause or section reference if found in checklist/NIT'),
+  pageNumber: z.string().optional().describe('Page number where requested'),
+  description: z.string().optional().describe('Short note or description of requirement'),
+  evidenceQuote: z.string().describe('Verbatim text copied from the tender page that demands this document'),
+})
 
-/**
- * Extracts text from PDF bytes with page references
- */
-async function extractPdfText(
-  pdfBytes: Uint8Array,
-  maxPages: number = 200
-): Promise<{ text: string; pageCount: number; pages: Array<{ pageNumber: number; text: string }> }> {
-  try {
-    const pdfjsLib = await loadPdfjs()
-    const doc = await pdfjsLib.getDocument({ data: new Uint8Array(pdfBytes) }).promise
-    const pagesToRead = Math.min(doc.numPages, maxPages)
-    const pages: Array<{ pageNumber: number; text: string }> = []
-    let fullText = ''
-
-    for (let i = 1; i <= pagesToRead; i++) {
-      const page = await doc.getPage(i)
-      const tc = await page.getTextContent()
-      const pageText = tc.items.map((it: any) => (it.str || '') + (it.hasEOL ? '\n' : ' ')).join('')
-      pages.push({ pageNumber: i, text: pageText })
-      fullText += `\n--- PAGE ${i} ---\n${pageText}`
-    }
-
-    return { text: fullText, pageCount: doc.numPages, pages }
-  } catch (err) {
-    console.warn('PDF parsing error in sample requirement check:', err)
-    return { text: '', pageCount: 0, pages: [] }
-  }
-}
-
-/**
- * Extracts targeted passages relevant to Test Reports, BIS Certificates, and Product Samples
- */
-function extractTargetSnippets(pages: Array<{ pageNumber: number; text: string }>): {
-  testReportSnippets: string
-  bisSnippets: string
-  sampleSnippets: string
-  generalTechSnippets: string
-} {
-  const testRe = /\b(test\s*report|type\s*test|acceptance\s*test|routine\s*test|testing\s*lab|nabl|erda|cpri|test\s*certificate|inspection\s*and\s*test|testing\s*charges|testing\s*agency)\b/i
-  const bisRe = /\b(bis|bureau\s+of\s+indian\s+standards|crs|compulsory\s+registration|is\s*14286|is\s*16221|is\s*9283|is\s*9000|isi\s*mark|almm|is\s*\d{3,5})\b/i
-  const sampleRe = /\b(product\s*sample|sample\s*submission|submission\s*of\s*sample|physical\s*sample|sample\s*testing|sample\s*approval|proto\s*type|dispatch\s*of\s*sample|sample\s*unit|sample\s*cell|sample\s*deposit|courier\s*receipt)\b/i
-  const techRe = /\b(technical\s*specification|eligibility\s*criteria|technical\s*bid|documents\s*to\s*be\s*submitted|cover[-\s]?(?:1|i)\b|envelope\s*1|schedule\s*of\s*requirements|mandatory\s*documents)\b/i
-
-  const testPassages: string[] = []
-  const bisPassages: string[] = []
-  const samplePassages: string[] = []
-  const techPassages: string[] = []
-
-  for (const page of pages) {
-    const content = page.text
-    if (testRe.test(content)) {
-      testPassages.push(`[Page ${page.pageNumber}]:\n${content.slice(0, 1500)}`)
-    }
-    if (bisRe.test(content)) {
-      bisPassages.push(`[Page ${page.pageNumber}]:\n${content.slice(0, 1500)}`)
-    }
-    if (sampleRe.test(content)) {
-      samplePassages.push(`[Page ${page.pageNumber}]:\n${content.slice(0, 1500)}`)
-    }
-    if (techRe.test(content) && techPassages.length < 5) {
-      techPassages.push(`[Page ${page.pageNumber}]:\n${content.slice(0, 1200)}`)
-    }
-  }
-
-  return {
-    testReportSnippets: testPassages.slice(0, 8).join('\n---\n'),
-    bisSnippets: bisPassages.slice(0, 8).join('\n---\n'),
-    sampleSnippets: samplePassages.slice(0, 8).join('\n---\n'),
-    generalTechSnippets: techPassages.slice(0, 4).join('\n---\n'),
-  }
-}
-
-/**
- * Deterministic fallback audit when OpenAI is unavailable or for rapid local analysis
- */
-function evaluateRequirementsHeuristically(
-  tenderTitle: string,
-  authority: string,
-  bid?: TenderBidDetails,
-  pdfSnippets?: { testReportSnippets: string; bisSnippets: string; sampleSnippets: string; generalTechSnippets: string },
-  pageCount?: number
-): SampleRequirementsAudit {
-  const titleLower = (tenderTitle || '').toLowerCase()
-  const authLower = (authority || '').toLowerCase()
-  const comp = bid?.testReportCompliance || ''
-  const techReq = bid?.technicalRequirement || ''
-  const components: TechnicalComponent[] = bid?.technicalComponents || []
-
-  const testSnippets = (pdfSnippets?.testReportSnippets || '').toLowerCase()
-  const bisSnippets = (pdfSnippets?.bisSnippets || '').toLowerCase()
-
-  // 1. TEST REPORT AUDIT
-  let testIsRequired = false
-  let testStatus: 'Required' | 'Not Required' | 'Optional' = 'Not Required'
-  let testClause = 'Not Specified in Tender Document'
-  let testReasoning = ''
-  const testStandards: string[] = []
-
-  // Check explicit test report compliance from bid
-  if (comp.trim().length > 0 && !comp.toLowerCase().includes('not applicable') && !comp.toLowerCase().includes('not required')) {
-    testIsRequired = true
-    testStatus = 'Required'
-    testClause = 'Tender Technical Bid Specifications - Test Report Clause'
-    testReasoning = `The tender document mandates submission of valid laboratory test report(s): "${comp.trim()}".`
-  } else if (
-    testSnippets.includes('shall submit type test') ||
-    testSnippets.includes('must submit test report') ||
-    testSnippets.includes('nabl accredited') ||
-    testSnippets.includes('test report from accredited') ||
-    testSnippets.includes('type test certificate')
-  ) {
-    testIsRequired = true
-    testStatus = 'Required'
-    testClause = 'Technical Specifications & Testing Protocol Clause'
-    testReasoning = 'Tender document specifies mandatory submission of type test / laboratory test certificates from a NABL / ERDA / CPRI accredited testing agency.'
-  } else if (
-    components.some(c => /solar|pump|inverter|motor|module|cable|transformer|pmsm|switchgear/i.test(c.item)) ||
-    /solar|pump|pumping|rooftop|substation|transmission|scada/i.test(titleLower)
-  ) {
-    testIsRequired = true
-    testStatus = 'Required'
-    testClause = 'Technical Standards for Specified Equipment / Components'
-    testReasoning = 'Government procurement rules for electrical/solar equipment mandate accredited type test reports (NABL / ERDA approved) to substantiate technical parameters.'
-  } else {
-    testIsRequired = false
-    testStatus = 'Not Required'
-    testClause = 'NIT Technical Scope & Bill of Quantities'
-    testReasoning = 'The tender document does not mandate submission of laboratory or type test reports for this scope of work.'
-  }
-
-  // Extract identified standards for test report
-  if (/14286/.test(comp + testSnippets)) testStandards.push('IS 14286')
-  if (/61215/.test(comp + testSnippets)) testStandards.push('IEC 61215')
-  if (/61730/.test(comp + testSnippets)) testStandards.push('IEC 61730')
-  if (/16221/.test(comp + testSnippets)) testStandards.push('IS 16221')
-  if (/nabl/i.test(comp + testSnippets)) testStandards.push('NABL Accredited Lab')
-  if (/erda/i.test(comp + testSnippets)) testStandards.push('ERDA')
-  if (/cpri/i.test(comp + testSnippets)) testStandards.push('CPRI')
-
-  if (testStandards.length === 0 && testIsRequired) {
-    testStandards.push('NABL / ERDA Accredited Testing Laboratory')
-  }
-
-  // 2. BIS CERTIFICATE AUDIT
-  let bisIsRequired = false
-  let bisStatus: 'Required' | 'Not Required' | 'Optional' = 'Not Required'
-  let bisClause = 'Not Specified in Tender Document'
-  let bisReasoning = ''
-  const bisStandards: string[] = []
-
-  if (
-    bisSnippets.includes('bis certificate') ||
-    bisSnippets.includes('compulsory registration') ||
-    bisSnippets.includes('bureau of indian standards') ||
-    bisSnippets.includes('is 14286') ||
-    bisSnippets.includes('is 16221')
-  ) {
-    bisIsRequired = true
-    bisStatus = 'Required'
-    bisClause = 'Technical Standards & Statutory Approvals (BIS / CRS Clause)'
-    bisReasoning = 'The tender document explicitly requires a valid Bureau of Indian Standards (BIS) Certificate or Compulsory Registration Scheme (CRS) license.'
-  } else if (
-    components.some(c => /solar|module|inverter|battery|led|cable/i.test(c.item)) ||
-    /solar|photovoltaic|spv|inverter|street light|led/i.test(titleLower)
-  ) {
-    bisIsRequired = true
-    bisStatus = 'Required'
-    bisClause = 'Statutory Compliance: MNRE / MeitY Compulsory BIS Registration'
-    bisReasoning = 'Under statutory orders of MNRE / MeitY, BIS CRS registration is legally mandatory for solar PV modules, inverters, and storage units supplied in Indian government projects.'
-  } else {
-    bisIsRequired = false
-    bisStatus = 'Not Required'
-    bisClause = 'NIT Technical Scope & Bill of Quantities'
-    bisReasoning = 'The tender document does not require BIS or CRS certification for the products/services under this scope.'
-  }
-
-  if (/14286/.test(bisSnippets + comp)) bisStandards.push('IS 14286')
-  if (/16221/.test(bisSnippets + comp)) bisStandards.push('IS 16221')
-  if (/crs|compulsory registration/i.test(bisSnippets)) bisStandards.push('BIS CRS Scheme')
-  if (bisStandards.length === 0 && bisIsRequired) {
-    bisStandards.push('Bureau of Indian Standards (BIS) CRS Scheme')
-  }
-
-  // 3. PRODUCT SAMPLE AUDIT
-  const sampleSnippets = (pdfSnippets?.sampleSnippets || '').toLowerCase()
-  let sampleIsRequired = false
-  let sampleStatus: 'Required' | 'Not Required' | 'Optional' = 'Not Required'
-  let sampleClause = 'Not Specified in Tender Document'
-  let sampleReasoning = ''
-  const sampleStandards: string[] = []
-
-  if (
-    sampleSnippets.includes('shall submit sample') ||
-    sampleSnippets.includes('submit product sample') ||
-    sampleSnippets.includes('submission of sample') ||
-    sampleSnippets.includes('sample shall be deposited') ||
-    sampleSnippets.includes('sample testing') ||
-    sampleSnippets.includes('prototype sample') ||
-    sampleSnippets.includes('dispatch of sample')
-  ) {
-    sampleIsRequired = true
-    sampleStatus = 'Required'
-    sampleClause = 'Tender Clause on Physical Sample Submission & Testing'
-    sampleReasoning = 'The tender document mandates submission of physical product sample(s) / prototype unit with dispatch acknowledgment to the tendering authority/testing cell prior to bid evaluation.'
-    sampleStandards.push('Physical Prototype Unit', 'Sample Delivery Receipt')
-  } else if (
-    /creda|scip|cggy/i.test(authority + ' ' + tenderTitle) ||
-    (components.some(c => /solar.*pump|controller|pump/i.test(c.item)) && /creda|phed|irrigation/i.test(authority + ' ' + tenderTitle))
-  ) {
-    sampleIsRequired = true
-    sampleStatus = 'Required'
-    sampleClause = 'Technical Bid Guidelines - Sample Submission'
-    sampleReasoning = 'Physical prototype sample submission and delivery challan are mandated under technical evaluation guidelines for state solar pumping schemes.'
-    sampleStandards.push('Prototype Controller / Pump Set', 'Inspection Challan')
-  } else {
-    sampleIsRequired = false
-    sampleStatus = 'Not Required'
-    sampleClause = 'NIT Technical Scope & Bill of Quantities'
-    sampleReasoning = 'The tender document does not mandate submission of physical product samples prior to technical bid submission.'
-  }
-
-  const testAudit: FieldRequirementAudit = {
-    isRequired: testIsRequired,
-    status: testStatus,
-    clauseOrRef: testClause,
-    reasoning: testReasoning,
-    applicableStandards: testStandards,
-    confidence: 'high',
-  }
-
-  const bisAudit: FieldRequirementAudit = {
-    isRequired: bisIsRequired,
-    status: bisStatus,
-    clauseOrRef: bisClause,
-    reasoning: bisReasoning,
-    applicableStandards: bisStandards,
-    confidence: 'high',
-  }
-
-  const sampleAudit: FieldRequirementAudit = {
-    isRequired: sampleIsRequired,
-    status: sampleStatus,
-    clauseOrRef: sampleClause,
-    reasoning: sampleReasoning,
-    applicableStandards: sampleStandards,
-    confidence: 'high',
-  }
-
-  return {
-    testReport: testAudit,
-    bisCertificate: bisAudit,
-    productSample: sampleAudit,
-    checkedAt: new Date().toISOString(),
-    sourceType: pageCount && pageCount > 0 ? 'tender-pdf' : 'tender-metadata',
-    summary: `AI Requirement Check: Test Report is ${testStatus.toUpperCase()}, BIS Certificate is ${bisStatus.toUpperCase()}, Product Sample is ${sampleStatus.toUpperCase()}.`,
-  }
-}
+const masterRequirementsAuditSchema = z.object({
+  mafLetter: masterRequirementItemSchema,
+  testReport: masterRequirementItemSchema,
+  bisCertificate: masterRequirementItemSchema,
+  productSample: masterRequirementItemSchema,
+  otherDocuments: z.array(otherDocumentItemSchema).optional().describe('List of other mandatory/required documents demanded in tender checklist, cover 1, eligibility criteria, or Section 1'),
+  summary: z.string().describe('Executive summary of the document requirement audits'),
+})
 
 export async function POST(request: Request) {
   try {
     const body = await request.json()
-    const { tenderId, tenderTitle, authority, tenderNumber, bid, pdfDataUrl, corrigenda } = body
+    const { tenderId, tenderTitle, authority, tenderNumber, bid, pdfDataUrl, corrigenda, customDocumentName } = body
 
-    let pages: Array<{ pageNumber: number; text: string }> = []
-    let pageCount = 0
+    const usage = new UsageTracker()
+    let mafSnippets = ''
     let testReportSnippets = ''
     let bisSnippets = ''
     let sampleSnippets = ''
     let generalTechSnippets = ''
 
-    // 1. If PDF base64 dataUrl is provided, parse the document
-    if (typeof pdfDataUrl === 'string' && pdfDataUrl.includes('base64,')) {
-      try {
-        const base64Data = pdfDataUrl.split('base64,')[1]
-        if (base64Data) {
-          const pdfBytes = Buffer.from(base64Data, 'base64')
-          const extracted = await extractPdfText(new Uint8Array(pdfBytes), 150)
-          pageCount = extracted.pageCount
-          pages = extracted.pages
+    const DEFAULT_PDF = 'Image_Module_Tender_11f1aec243f3da04a696b42e99c9ac7b.pdf'
+    const tenderDocSrc =
+      pdfDataUrl ||
+      (customDocumentName ? `/docs/${customDocumentName}` : undefined) ||
+      `/docs/${DEFAULT_PDF}`
+    const tenderDocName = customDocumentName || DEFAULT_PDF
 
-          const snippets = extractTargetSnippets(pages)
-          testReportSnippets = snippets.testReportSnippets
-          bisSnippets = snippets.bisSnippets
-          sampleSnippets = snippets.sampleSnippets
-          generalTechSnippets = snippets.generalTechSnippets
-        }
-      } catch (pdfErr) {
-        console.warn('Could not extract PDF text for sample requirements check:', pdfErr)
+    // 1. This tender's OWN document + its corrigenda, from the shared page index
+    //    (pdf.js text, OCR eng+hin, OpenAI Vision). No other tender's file is ever used.
+    const tenderLike = {
+      id: tenderId,
+      tenderDoc: { name: tenderDocName, dataUrl: tenderDocSrc },
+      corrigenda: Array.isArray(corrigenda) ? corrigenda : [],
+    }
+    const evidenceWarnings: string[] = []
+    const evidence = tenderId
+      ? await loadTenderEvidence(tenderLike, { usage, timeBudgetMs: 150000 })
+      : { docs: [], chunks: [] as DocumentPageChunk[], warnings: ['No tender id supplied.'], incomplete: false, statusText: 'No tender id.' }
+    evidenceWarnings.push(...evidence.warnings)
+    if (evidence.incomplete) {
+      return NextResponse.json(
+        { success: false, pending: true, error: `The tender document is still being read (${evidence.statusText}). Please retry in a moment.` },
+        { status: 409 }
+      )
+    }
+    const evidenceChunks = evidence.chunks
+    const readableChunks = evidenceChunks.filter(c => !c.content.startsWith('[EXTRACTION FAILED'))
+    const tenderDocs = evidence.docs.filter(d => d.role === 'tender')
+    const pageCount = tenderDocs.reduce((n, d) => n + (d.pageCount || 0), 0)
+    const totalExtractedChars = readableChunks.reduce((n, c) => n + c.content.replace(/\s+/g, '').length, 0)
+    const docDisplayName = tenderDocs[0]?.docName || customDocumentName || tenderTitle || 'Tender document'
+
+    const block = (chunks: DocumentPageChunk[]) =>
+      chunks
+        .map(c => `=== [DOCUMENT: "${c.docName}" | PAGE: ${c.pageNumber}${c.extractionMethod && c.extractionMethod !== 'text' ? ` | read by: ${c.extractionMethod}` : ''}] ===\n${c.content}`)
+        .join('\n\n')
+    const facet = async (query: string, maxTokens = 7000) =>
+      evidenceChunks.length
+        ? block(
+            (await hybridRetrieve({ tenderId: String(tenderId), docs: evidence.docs, chunks: evidenceChunks, query, maxTokens, usage, warnings: evidenceWarnings }))
+              .retrievedChunks
+          )
+        : ''
+    mafSnippets = await facet('manufacturer authorization form MAF OEM authorisation letter dealer distributor')
+    testReportSnippets = await facet('test report laboratory NABL type test certificate testing accredited')
+    bisSnippets = await facet('BIS certificate bureau of indian standards CRS registration ISI licence')
+    sampleSnippets = await facet('sample submission inspection of samples physical sample prototype')
+    generalTechSnippets = await facet('documents to be submitted checklist envelope technical bid mandatory documents annexure', 9000)
+
+    // Direct clause fallback: ensure snippets are never empty when evidence chunks exist
+    if (evidenceChunks.length > 0) {
+      const testRe = /\b(test\s*report|type\s*test|acceptance\s*test|routine\s*test|testing\s*lab|nabl|erda|cpri|test\s*certificate|inspection\s*and\s*test|testing\s*charges|testing\s*agency)\b/i
+      const bisRe = /\b(bis|bureau\s+of\s+indian\s+standards|crs|compulsory\s+registration|is\s*14286|is\s*16221|is\s*9283|is\s*9000|isi\s*mark|almm|is\s*\d{3,5})\b/i
+      const sampleRe = /\b(product\s*sample|sample\s*submission|submission\s*of\s*sample|physical\s*sample|sample\s*testing|sample\s*approval|proto\s*type|dispatch\s*of\s*sample|sample\s*unit|sample\s*cell|sample\s*deposit|courier\s*receipt)\b/i
+      const mafRe = /\b(maf|manufacturer\s*authori[zs]ation|oem\s*authori[zs]ation|authori[zs]ation\s*letter|annexure\s*[a-z0-9]+)\b/i
+
+      const directTest = evidenceChunks.filter(c => testRe.test(c.content)).map(c => `=== [DOCUMENT: "${c.docName}" | PAGE: ${c.pageNumber}] ===\n${c.content.slice(0, 2000)}`).slice(0, 10).join('\n\n')
+      const directBis = evidenceChunks.filter(c => bisRe.test(c.content)).map(c => `=== [DOCUMENT: "${c.docName}" | PAGE: ${c.pageNumber}] ===\n${c.content.slice(0, 2000)}`).slice(0, 10).join('\n\n')
+      const directSample = evidenceChunks.filter(c => sampleRe.test(c.content)).map(c => `=== [DOCUMENT: "${c.docName}" | PAGE: ${c.pageNumber}] ===\n${c.content.slice(0, 2000)}`).slice(0, 10).join('\n\n')
+      const directMaf = evidenceChunks.filter(c => mafRe.test(c.content)).map(c => `=== [DOCUMENT: "${c.docName}" | PAGE: ${c.pageNumber}] ===\n${c.content.slice(0, 2000)}`).slice(0, 10).join('\n\n')
+
+      if (!testReportSnippets || testReportSnippets.length < 100) testReportSnippets = directTest
+      else if (directTest) testReportSnippets += `\n\n${directTest}`
+
+      if (!bisSnippets || bisSnippets.length < 100) bisSnippets = directBis
+      else if (directBis) bisSnippets += `\n\n${directBis}`
+
+      if (!sampleSnippets || sampleSnippets.length < 100) sampleSnippets = directSample
+      else if (directSample) sampleSnippets += `\n\n${directSample}`
+
+      if (!mafSnippets || mafSnippets.length < 100) mafSnippets = directMaf
+      else if (directMaf) mafSnippets += `\n\n${directMaf}`
+    }
+
+    // 3. Verification for Scanned / Incomplete / Unreadable Documents
+    const isDocumentIncompleteOrScanned = pageCount > 0 && totalExtractedChars < 50
+    if (isDocumentIncompleteOrScanned) {
+      const buildIncompleteAuditItem = (reqTitle: string, question: string): FieldRequirementAudit => ({
+        isRequired: false,
+        status: 'MANUAL VERIFICATION REQUIRED',
+        masterStatus: 'MANUAL VERIFICATION REQUIRED',
+        documentName: docDisplayName,
+        questionOrRequirement: question,
+        finalAnswer: 'MANUAL VERIFICATION REQUIRED: The uploaded PDF is a scanned image document without selectable text layer.',
+        originalDocumentEvidence: 'UNABLE TO VERIFY FROM THE PROVIDED DOCUMENT.',
+        pageNumber: `Pages 1 to ${pageCount}`,
+        clauseOrSection: 'Not Readable (Scanned Image PDF)',
+        detailedExplanation: `The source document "${docDisplayName}" has ${pageCount} pages, but contains no embedded text layer. Relevant tender clauses and specifications require manual inspection.`,
+        missingInformation: `Text layer missing. All ${pageCount} pages appear to be scanned image bitmaps without OCR text.`,
+        verificationStatus: 'UNABLE_TO_VERIFY',
+        finalRecommendation: 'Inspect physical tender documents or high-resolution page scans for manual verification.',
+        clauseOrRef: 'Document Incomplete / Scanned',
+        reasoning: 'Scanned image PDF without selectable text.',
+        applicableStandards: [],
+        confidence: 'low',
+      })
+
+      const incompleteAudit: SampleRequirementsAudit = {
+        mafLetter: buildIncompleteAuditItem('MAF Letter', 'Is Manufacturer Authorization Form (MAF) mandatory?'),
+        testReport: buildIncompleteAuditItem('Test Report', 'Is Laboratory Test Report mandatory?'),
+        bisCertificate: buildIncompleteAuditItem('BIS Certificate', 'Is BIS / CRS Certificate mandatory?'),
+        productSample: buildIncompleteAuditItem('Product Sample', 'Is Physical Product Sample submission mandatory?'),
+        otherDocuments: [],
+        checkedAt: new Date().toISOString(),
+        sourceType: 'tender-pdf',
+        summary: `MANUAL VERIFICATION REQUIRED: "${docDisplayName}" contains ${pageCount} scanned pages. Physical document verification required.`,
+        documentName: docDisplayName,
+        totalPagesAnalyzed: pageCount,
+        issuingAuthority: authority,
+        tenderNumber: tenderNumber || tenderId,
+        verificationQuality: 'UNABLE_TO_VERIFY',
       }
-    }
 
-    // 2. Append any Corrigenda notes to relevant snippets
-    if (Array.isArray(corrigenda) && corrigenda.length > 0) {
-      const corrNotes = corrigenda
-        .map(c => `[Corrigendum ${c.corrigendumNo || ''} - ${c.title || ''}]: ${c.summary || ''}`)
-        .join('\n')
-      generalTechSnippets += `\n\nCorrigenda Records:\n${corrNotes}`
-    }
-
-    // 3. Fallback heuristic baseline
-    const fallbackAudit = evaluateRequirementsHeuristically(
-      tenderTitle || '',
-      authority || '',
-      bid,
-      { testReportSnippets, bisSnippets, sampleSnippets, generalTechSnippets },
-      pageCount
-    )
-
-    // 4. If OpenAI is configured, execute high-accuracy structured audit
-    const apiKey = process.env.OPENAI_API_KEY
-    if (!apiKey) {
       return NextResponse.json({
         success: true,
-        audit: fallbackAudit,
-        source: fallbackAudit.sourceType,
+        audit: incompleteAudit,
+        source: incompleteAudit.sourceType,
       })
+    }
+
+    // 4. When the AI audit cannot run, return an explicit UNABLE_TO_VERIFY audit.
+    //    (The former keyword "heuristic" filled in clauses, pages and quotes from a
+    //    different CREDA tender whenever a keyword matched – fabricated evidence.)
+    const unverifiedItem = (question: string, reason: string): FieldRequirementAudit => ({
+      isRequired: false,
+      status: 'MANUAL VERIFICATION REQUIRED',
+      masterStatus: 'MANUAL VERIFICATION REQUIRED',
+      documentName: docDisplayName,
+      questionOrRequirement: question,
+      finalAnswer: `MANUAL VERIFICATION REQUIRED: ${reason}`,
+      originalDocumentEvidence: 'UNABLE TO VERIFY FROM THE PROVIDED DOCUMENT.',
+      pageNumber: 'N/A',
+      clauseOrSection: 'Not verified',
+      verificationStatus: 'UNABLE_TO_VERIFY',
+      finalRecommendation: 'Check this requirement in the original tender document.',
+      clauseOrRef: 'Not verified',
+      reasoning: reason,
+      applicableStandards: [],
+      confidence: 'low',
+    })
+    const buildUnverifiedAudit = (reason: string): SampleRequirementsAudit => ({
+      mafLetter: unverifiedItem('Is Manufacturer Authorization Form (MAF) mandatory?', reason),
+      testReport: unverifiedItem('Is Laboratory Test Report mandatory?', reason),
+      bisCertificate: unverifiedItem('Is BIS / CRS Certificate mandatory?', reason),
+      productSample: unverifiedItem('Is Physical Product Sample submission mandatory?', reason),
+      otherDocuments: [],
+      checkedAt: new Date().toISOString(),
+      sourceType: pageCount > 0 ? 'tender-pdf' : 'tender-metadata',
+      summary: `MANUAL VERIFICATION REQUIRED: ${reason}`,
+      documentName: docDisplayName,
+      totalPagesAnalyzed: pageCount,
+      issuingAuthority: authority,
+      tenderNumber: tenderNumber || tenderId,
+      verificationQuality: 'UNABLE_TO_VERIFY',
+    })
+
+    if (pageCount === 0) {
+      const audit = buildUnverifiedAudit('The tender document for this tender could not be loaded, so no requirement can be verified.')
+      return NextResponse.json({ success: true, audit, source: audit.sourceType })
+    }
+
+    // 5. If OpenAI is configured, execute high-accuracy structured audit with Master System Prompt
+    const apiKey = process.env.OPENAI_API_KEY
+    if (!apiKey) {
+      const audit = buildUnverifiedAudit('AI service is not configured (OPENAI_API_KEY missing).')
+      return NextResponse.json({ success: true, audit, source: audit.sourceType })
     }
 
     try {
       const openai = createOpenAI({ apiKey })
       const components: TechnicalComponent[] = bid?.technicalComponents || []
 
-      const prompt = `
-You are a senior Indian Government Tender Procurement & Compliance Auditor (specializing in SECI, CREDA, DISCOMs, PWD, NTPC, CPWD).
-Analyze the following official Tender Document passages, Technical Scope, and Bid Details to audit the mandatory document requirements.
+      const masterSystemPrompt = `
+# MASTER SYSTEM PROMPT: ADVANCED PDF READING, UNDERSTANDING & EVIDENCE-BASED ANSWERING ENGINE
 
-Tender ID / Number: ${tenderNumber || tenderId || 'Tender'}
-Tender Title / Scope: ${tenderTitle || 'Government Tender'}
+## 1. YOUR ROLE
+You are an Advanced AI Document Intelligence and PDF Analysis Engine.
+Your primary responsibility is to read, understand, analyze, interpret, and answer questions based exclusively on the original documents uploaded by the user.
+You must behave like a professional document analyst who carefully reads every relevant page before answering.
+Your goal is not to generate answers quickly. Your goal is to generate accurate, complete, evidence-supported answers.
+ACCURACY IS MORE IMPORTANT THAN SPEED OR ANSWER COMPLETENESS.
+
+## 2. ORIGINAL UPLOADED DOCUMENT IS THE ONLY SOURCE OF TRUTH
+You must follow these rules strictly:
+1. Use the uploaded PDF and other explicitly provided source documents as the primary source of truth.
+2. Never assume information that is not present in the uploaded documents.
+3. Never use your general knowledge to invent document-specific facts.
+4. Never add information simply because it is commonly used in the relevant industry.
+5. Never modify the meaning of the original document.
+6. Never replace missing information with estimated or assumed information.
+7. If the document does not contain the requested information, clearly state that it is not found.
+8. If multiple documents are provided, analyze their contents separately and identify any contradictions.
+
+## 3. COMPLETE PDF READING PROCESS
+- Preserve row and column relationships in tables.
+- Check cross-references and annexures.
+- Compare extracted facts with original text.
+- Never claim that complete PDF was analyzed if pages could not be processed.
+
+## 4. STRICT ANTI-HALLUCINATION RULES
+You must NEVER:
+- Invent facts, figures, dates, names, or reference numbers.
+- Generate imaginary clauses or page numbers.
+- Assume that a document is mandatory without evidence.
+- Assume that a document is not required without sufficient document coverage.
+- Generate fake certificates or approvals.
+- Generate imaginary laboratory test results.
+- Generate PASS or FAIL results without an actual test report.
+- Invent BIS license numbers or validity status.
+- Invent NABL accreditation.
+- Invent ALMM approval.
+- Invent product sample submission status.
+- Invent dispatch dates, courier receipts, or inspection acknowledgements.
+- Present AI-generated content as an officially issued document.
+
+If information is unavailable, return:
+"NOT AVAILABLE IN THE PROVIDED DOCUMENT."
+
+If the information cannot be reliably verified, return:
+"UNABLE TO VERIFY FROM THE PROVIDED DOCUMENT."
+
+## 5. TENDER DOCUMENT ANALYSIS RULES
+For each document requirement, assign one of the following statuses:
+- MANDATORY: The tender explicitly requires the document.
+- NOT REQUIRED: The relevant complete tender sections have been checked and no applicable submission requirement exists.
+- CONDITIONAL: The document is required only when a specific condition applies.
+- UNCLEAR: The available evidence is insufficient to determine the requirement.
+- DOCUMENT INCOMPLETE: Relevant pages, annexures, or referenced documents are missing or unreadable.
+
+Important distinctions:
+- Technical standard mentioned DOES NOT automatically mean a separate certificate must be submitted.
+- Product compliance DOES NOT automatically mean a test report must be uploaded.
+- General regulatory requirements MUST NOT automatically be classified as tender-specific submission requirements.
+- A recommendation is not the same as a mandatory requirement.
+- A condition applicable only to selected bidders must not be classified as universally mandatory.
+
+## 6. EXACT EVIDENCE AND SOURCE REFERENCES
+Every important conclusion must be supported by original document evidence:
+- Original statement or exact relevant extract (verbatim quotation)
+- Physical PDF page number (e.g. "Page 14" or "Pages 14, 22")
+- Clause number and Section name
+- Source document name
+`
+
+      const userPrompt = `
+DOCUMENT METADATA:
+Document Name: ${docDisplayName}
+Total Pages Analyzed: ${pageCount > 0 ? pageCount : 'Metadata Only (No PDF attached)'}
+Tender Reference / ID: ${tenderNumber || tenderId || 'Tender'}
 Procuring Authority: ${authority || 'Tendering Authority'}
 
 Bid Technical Scope & Equipment Components:
 ${JSON.stringify(components, null, 2)}
 
-Bid Test Report Compliance Note:
+Bid Test Report Compliance Note from User / Portal:
 "${bid?.testReportCompliance || 'None specified in metadata'}"
 
 Bid Technical Requirement Summary:
 "${bid?.technicalRequirement || 'None specified in metadata'}"
 
-TARGET TENDER DOCUMENT PASSAGES:
-=== Passages mentioning Test Report / Laboratory / Testing ===
-${testReportSnippets || 'No direct Test Report keywords found in scanned PDF pages.'}
+=== EXTRACTED ORIGINAL TENDER DOCUMENT PASSAGES ===
+[Passages mentioning Manufacturer Authorization Form (MAF) / OEM Letter]:
+${mafSnippets || 'No direct MAF / OEM authorization keywords found in extracted PDF pages.'}
 
-=== Passages mentioning BIS / Bureau of Indian Standards / CRS ===
-${bisSnippets || 'No direct BIS keywords found in scanned PDF pages.'}
+[Passages mentioning Laboratory / Type Test Report / NABL / Testing]:
+${testReportSnippets || 'No direct Test Report keywords found in extracted PDF pages.'}
 
-=== Passages mentioning Product Sample / Physical Sample Submission ===
-${sampleSnippets || 'No direct Product Sample keywords found in scanned PDF pages.'}
+[Passages mentioning BIS / Bureau of Indian Standards / CRS Scheme / ISI]:
+${bisSnippets || 'No direct BIS keywords found in extracted PDF pages.'}
 
-=== General Technical Bid / Eligibility Passages ===
+[Passages mentioning Product Sample / Physical Sample Submission / Prototype]:
+${sampleSnippets || 'No direct Product Sample keywords found in extracted PDF pages.'}
+
+[General Technical Bid / Mandatory Submission Passages]:
 ${generalTechSnippets || 'None extracted.'}
 
-INSTRUCTIONS & RULES:
-1. TEST REPORT AUDIT:
-   - Does this tender explicitly mandate bidders to submit a Laboratory Test Report or Type Test Report (e.g. from NABL, ERDA, CPRI accredited lab)?
-   - If YES, status = "Required", provide exact Clause / Section / Page number (or verbatim reference), reasoning, and applicable standards (e.g. IS 14286, IEC 61215, NABL).
-   - If NO, status = "Not Required", clause = "Not Specified in Tender Document", reasoning = "Explain why not required based strictly on the tender scope."
-   - If it is only optional or required after award during dispatch/execution, set status = "Optional" and explain.
+TASK:
+Independently analyze the 4 document requirements:
+1. MAF Letter (Manufacturer Authorization Form / OEM Letter for specified makes)
+2. Test Report (Laboratory / Type Test Report from NABL / ERDA / CPRI accredited laboratory)
+3. BIS Certificate (Bureau of Indian Standards / CRS Scheme / Compulsory Registration)
+4. Product Sample (Physical prototype unit submission / sample testing / testing cell receipt)
 
-2. BIS CERTIFICATE AUDIT:
-   - Does this tender mandate submission of a Bureau of Indian Standards (BIS) Certificate or Compulsory Registration Scheme (CRS) license for the components?
-   - In Indian solar & electrical tenders, MNRE/MeitY directives legally mandate BIS CRS for solar PV modules, inverters, and battery storage. If equipment matches or tender text mentions it, mark "Required".
-   - If the tender is civil/services or does not require BIS, status = "Not Required" and explain clearly.
-
-3. PRODUCT SAMPLE AUDIT:
-   - Does this tender explicitly mandate bidders to submit physical product sample(s), prototype units, or sample dispatch challan to the testing cell/department before bid opening?
-   - If YES, status = "Required", cite exact clause/page, reasoning, and submission requirements.
-   - If NO, status = "Not Required", clause = "Not Specified in Tender Document", explain that physical sample submission is not mandated prior to bid evaluation.
-   - If required only on request or after LOA, status = "Optional" / conditional.
-
-4. ZERO HALLUCINATION:
-   - Base your decision strictly on the provided tender context and standard Indian government procurement directives.
-   - Do not invent fictitious clauses or requirements.
+Follow all rules of the MASTER SYSTEM PROMPT. Ground every field strictly in the extracted passages. If not in the document, return "NOT AVAILABLE IN THE PROVIDED DOCUMENT." Never invent clauses or page numbers.
 `
 
-      const { output } = await generateText({
-        model: openai(process.env.OPENAI_MODEL || 'gpt-4o'),
-        system:
-          'You are an authoritative government procurement compliance officer. Give factual, clause-referenced audits without assumptions.',
-        output: Output.object({ schema: sampleRequirementsSchema }),
-        prompt,
+      const model = process.env.OPENAI_MODEL || 'gpt-4o'
+      const { output, usage: genUsage } = await generateText({
+        model: openai(model),
+        system: masterSystemPrompt,
+        output: Output.object({ schema: masterRequirementsAuditSchema }),
+        prompt: userPrompt,
       })
 
+      usage.add('extract', model, genUsage as any)
+
+      // Deterministic check: is the quoted evidence really on the cited page?
+      const quoteVerified = (quote: string | undefined, pageRef: string | undefined): boolean => {
+        const q = (quote || '').trim()
+        if (!q || /NOT AVAILABLE|UNABLE TO VERIFY/i.test(q)) return false
+        const pagesCited = String(pageRef || '').match(/\d+/g)?.map(Number) || []
+        const pool = pagesCited.length ? readableChunks.filter(c => pagesCited.includes(c.pageNumber || -1)) : []
+        return pool.some(c => quoteOnPage(q, c.content))
+      }
+
+      // Normalize output into FieldRequirementAudit with backwards compatibility
+      const formatFieldAudit = (rawItem: any): FieldRequirementAudit => {
+        const item = { ...rawItem }
+        const hasEvidence = item.originalDocumentEvidence && !/NOT AVAILABLE|UNABLE TO VERIFY/i.test(item.originalDocumentEvidence)
+        if (hasEvidence && !quoteVerified(item.originalDocumentEvidence, item.pageNumber)) {
+          item.verificationStatus = 'UNABLE_TO_VERIFY'
+          item.confidence = 'low'
+          item.missingInformation = `${item.missingInformation && item.missingInformation !== 'None' ? `${item.missingInformation} ` : ''}[System: the quoted evidence was not found on the cited page (${item.pageNumber}). Verify manually.]`
+          if (item.status === 'MANDATORY' || item.status === 'NOT REQUIRED') item.status = 'MANUAL VERIFICATION REQUIRED'
+        }
+        if (item.verificationStatus === 'VERIFIED_FROM_DOCUMENT' && !hasEvidence) item.verificationStatus = 'UNABLE_TO_VERIFY'
+        const isReq = item.status === 'MANDATORY' || item.status === 'CONDITIONAL'
+        // Map master status to legacy status ('Required' | 'Not Required' | 'Optional')
+        const legacyStatus: 'Required' | 'Not Required' | 'Optional' =
+          item.status === 'MANDATORY'
+            ? 'Required'
+            : item.status === 'NOT REQUIRED'
+            ? 'Not Required'
+            : 'Optional'
+
+        return {
+          isRequired: isReq,
+          status: legacyStatus,
+          masterStatus: item.status as MasterRequirementStatus,
+          documentName: item.documentName || docDisplayName,
+          questionOrRequirement: item.questionOrRequirement,
+          finalAnswer: item.finalAnswer,
+          originalDocumentEvidence: item.originalDocumentEvidence,
+          pageNumber: item.pageNumber,
+          clauseOrSection: item.clauseOrSection,
+          detailedExplanation: item.detailedExplanation,
+          missingInformation: item.missingInformation,
+          verificationStatus: item.verificationStatus,
+          finalRecommendation: item.finalRecommendation,
+          applicableStandards: item.applicableStandards || [],
+          confidence: item.confidence || 'high',
+          clauseOrRef: item.clauseOrSection || 'Not Specified',
+          reasoning: item.detailedExplanation || item.finalAnswer,
+          bulletPoints: item.bulletPoints && item.bulletPoints.length > 0 ? item.bulletPoints : undefined,
+          importantNotes: item.importantNotes && item.importantNotes.length > 0 ? item.importantNotes : undefined,
+          corrigendumNote: item.corrigendumNote || undefined,
+          requiredDocumentSummary: item.requiredDocumentSummary || undefined,
+        }
+      }
+
       const finalAudit: SampleRequirementsAudit = {
-        testReport: output.testReport,
-        bisCertificate: output.bisCertificate,
-        productSample: output.productSample,
+        mafLetter: formatFieldAudit(output.mafLetter),
+        testReport: formatFieldAudit(output.testReport),
+        bisCertificate: formatFieldAudit(output.bisCertificate),
+        productSample: formatFieldAudit(output.productSample),
+        otherDocuments: (output.otherDocuments || []).map((d: any) => ({
+          ...d,
+          quoteVerified: quoteVerified(d.evidenceQuote, d.pageNumber),
+        })),
         checkedAt: new Date().toISOString(),
         sourceType: pageCount > 0 ? 'tender-pdf' : 'tender-metadata',
         summary: output.summary,
+        documentName: docDisplayName,
+        totalPagesAnalyzed: pageCount,
+        issuingAuthority: authority,
+        tenderNumber: tenderNumber || tenderId,
+        verificationQuality: pageCount > 0 ? 'HIGH_CONFIDENCE_GROUNDED' : 'HEURISTIC_FALLBACK',
+        evidenceStatus: evidence.statusText,
+        evidenceWarnings,
       }
+      console.info('[ai-check-sample-requirements] usage', JSON.stringify(usage.toJSON()))
 
       return NextResponse.json({
         success: true,
         audit: finalAudit,
         source: finalAudit.sourceType,
+        usage: usage.toJSON(),
       })
     } catch (aiErr: any) {
-      console.warn('OpenAI requirement audit failed, using deterministic audit:', aiErr?.message)
-      return NextResponse.json({
-        success: true,
-        audit: fallbackAudit,
-        source: fallbackAudit.sourceType,
-      })
+      console.error('OpenAI requirement audit failed:', aiErr?.message)
+      const audit = buildUnverifiedAudit(`The AI audit failed (${aiErr?.message || 'error'}). Please retry.`)
+      return NextResponse.json({ success: true, audit, source: audit.sourceType })
     }
   } catch (err: any) {
     console.error('Fatal error in ai-check-sample-requirements API:', err)
@@ -476,4 +492,3 @@ INSTRUCTIONS & RULES:
     )
   }
 }
-

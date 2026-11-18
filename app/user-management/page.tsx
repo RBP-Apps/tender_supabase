@@ -176,7 +176,7 @@ export default function UserManagementPage() {
 
       {/* 3. Users Table */}
       <div className="card list-card overflow-hidden">
-        <div className="table-wrapper">
+        <div className="table-wrap">
           <table className="tender-table">
             <thead>
               <tr>

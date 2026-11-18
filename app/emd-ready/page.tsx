@@ -4,12 +4,15 @@ import React, { useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import {
+  AlertTriangle,
   ArrowRight,
+  Bot,
   Building,
   Calendar,
   CheckCircle2,
   Clock3,
   CreditCard,
+  FileCheck2,
   FileText,
   Hash,
   IndianRupee,
@@ -77,6 +80,13 @@ export default function EmdReadyPage() {
     )
   }, [tenders])
 
+  // Tenders submitted with blank UTR or Date (Notification Banner Trigger)
+  const pendingRemittanceTenders = useMemo(() => {
+    return tenders.filter(
+      t => t.emdReady && (!t.emdReady.utrNumber?.trim() || !t.emdReady.date?.trim())
+    )
+  }, [tenders])
+
   const filtered = useMemo(() => {
     const list = tab === 'completed' ? completedTenders : pendingTenders
     if (!query.trim()) return list
@@ -113,6 +123,14 @@ export default function EmdReadyPage() {
           </p>
         </div>
         <div className="flex items-center gap-3">
+          <Link
+            href="/tender-query"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-semibold text-xs shadow-xs hover:from-blue-700 hover:to-indigo-700 transition-all"
+            title="Ask Universal AI questions regarding tender EMD, bank guarantees, and financial documents"
+          >
+            <Bot className="w-3.5 h-3.5" />
+            <span>Ask AI About EMD</span>
+          </Link>
           <Link href="/sample-details" className="secondary-button text-xs">
             Previous: Sample Details
           </Link>
@@ -153,6 +171,33 @@ export default function EmdReadyPage() {
             />
           </div>
         </div>
+
+        {/* Notification Banner above Table: Alert user if submitted with blank UTR or Date */}
+        {pendingRemittanceTenders.length > 0 && (
+          <div className="mx-6 mb-3 p-3.5 bg-amber-50 border border-amber-300 rounded-xl flex items-center justify-between gap-4 text-xs shadow-xs">
+            <div className="flex items-start gap-2.5 text-amber-950">
+              <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+              <div>
+                <strong className="font-bold text-amber-950 block">
+                  Notification: {pendingRemittanceTenders.length} Tender(s) Submitted with Blank Remittance Details
+                </strong>
+                <p className="text-amber-800 text-[11.5px] mt-0.5 leading-relaxed">
+                  You have submitted tender(s) with blank <strong>UTR ID / Reference</strong> and/or <strong>Payment Date</strong>. Once payment transfer is finalized, you can click <strong>Action / Edit</strong> on those tenders anytime to record their final transaction details.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setTab('completed')
+                setQuery('')
+              }}
+              className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold text-[11px] whitespace-nowrap transition-all shadow-xs cursor-pointer"
+            >
+              View Incomplete ({pendingRemittanceTenders.length})
+            </button>
+          </div>
+        )}
 
         {/* Table */}
         <div className="table-wrap">
@@ -244,6 +289,15 @@ export default function EmdReadyPage() {
                         >
                           <FileText />
                         </Link>
+
+                        {/* Ask Universal AI about this tender & documents */}
+                        <Link
+                          href={`/tender-query?tenderId=${encodeURIComponent(t.id)}`}
+                          className="icon-action text-indigo-600 hover:text-indigo-800"
+                          title="Ask Universal AI about this tender and its EMD documents"
+                        >
+                          <Bot />
+                        </Link>
                       </div>
                     </td>
 
@@ -255,6 +309,15 @@ export default function EmdReadyPage() {
                           {t.value && (
                             <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200/80">
                               {t.value}
+                            </span>
+                          )}
+                          {t.emdReady?.generatedDocument && (
+                            <span
+                              className="text-[10px] font-semibold text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-200/80 inline-flex items-center gap-1"
+                              title={`EMD Word & PDF Document v${t.emdReady.generatedDocument.version || 1} Generated`}
+                            >
+                              <FileCheck2 className="w-3 h-3 text-indigo-600" />
+                              Doc Ready (v{t.emdReady.generatedDocument.version || 1})
                             </span>
                           )}
                         </div>
@@ -309,16 +372,29 @@ export default function EmdReadyPage() {
 
                         {/* 4. UTR Number */}
                         <td>
-                          <span className="font-mono font-semibold text-purple-700 bg-purple-50 border border-purple-200 px-2 py-0.5 rounded text-xs whitespace-nowrap">
-                            {t.emdReady?.utrNumber || '—'}
-                          </span>
+                          {t.emdReady?.utrNumber?.trim() ? (
+                            <span className="font-mono font-semibold text-purple-700 bg-purple-50 border border-purple-200 px-2 py-0.5 rounded text-xs whitespace-nowrap">
+                              {t.emdReady.utrNumber}
+                            </span>
+                          ) : (
+                            <span className="font-medium text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded text-[11px] whitespace-nowrap inline-flex items-center gap-1">
+                              <AlertTriangle className="w-3 h-3 text-amber-600" />
+                              Blank / Pending
+                            </span>
+                          )}
                         </td>
 
                         {/* 5. Date */}
                         <td>
-                          <span className="text-xs text-slate-700 font-medium whitespace-nowrap">
-                            {t.emdReady?.date || '—'}
-                          </span>
+                          {t.emdReady?.date?.trim() ? (
+                            <span className="text-xs text-slate-700 font-medium whitespace-nowrap">
+                              {t.emdReady.date}
+                            </span>
+                          ) : (
+                            <span className="font-medium text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded text-[11px] whitespace-nowrap">
+                              Date Pending
+                            </span>
+                          )}
                         </td>
 
                         {/* 6. Remark */}

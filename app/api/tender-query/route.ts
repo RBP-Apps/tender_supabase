@@ -5,13 +5,17 @@ import { sanitizeTenderForAI, formatTenderDetailedContext } from '@/lib/tender-a
 import { retrieveContextForQuery } from '@/lib/document-retrieval-engine'
 import {
   verifyResponseAccuracy,
-  extractCitationsFromResponse,
   NOT_FOUND_DISCLAIMER,
+  EXTRACTION_INCOMPLETE_DISCLAIMER,
 } from '@/lib/document-verifier'
 import { DocumentPageChunk } from '@/types/document-understanding'
+import { supabase } from '@/lib/supabaseClient'
+import { findTenderIndexes, loadIndexedPages, pagesToChunks, semanticScores } from '@/lib/document-index-store'
+import { runSemanticVerification } from '@/lib/answer-semantic-verifier'
+import { UsageTracker } from '@/lib/ai-usage'
 
 export const runtime = 'nodejs'
-export const maxDuration = 60
+export const maxDuration = 120
 
 const SYSTEM_INSTRUCTIONS = `You are "Tender Query AI", the intelligent Universal Document Understanding & Answering Assistant embedded inside Tender FMS.
 Your mission is to assist users with everything related to Tender FMS: workflows, modules, required documents, eligibility rules, live tender records, and analyzing attached user documents with deep comprehension comparable to ChatGPT, Gemini, and Claude.
@@ -21,32 +25,47 @@ Your mission is to assist users with everything related to Tender FMS: workflows
 - For Hindi/Hinglish questions, provide natural, professional, and clear answers.
 
 ### CORE PRINCIPLE:
-"Read the Entire Document, Understand the Context, Verify the Source, and Answer Only What the Document Actually Says."
+You are a Tender Document Analysis Assistant. Your only authoritative source for tender-specific answers is the actual tender document uploaded by the user, as given to you in "EXTRACTED GROUND-TRUTH DOCUMENT SECTIONS".
+You are strictly prohibited from inventing, assuming, estimating or inferring missing tender information.
+You have NOT read the whole document: you only see the passages retrieved below. Never pretend to have read pages, clauses or tables that are not shown to you.
+A separate automated verifier will check every number, date, percentage and page you cite against the original text; claims that are not in the passages will be flagged to the user.
+
+### SOURCES AND THEIR AUTHORITY:
+- "EXTRACTED GROUND-TRUTH DOCUMENT SECTIONS" = text of the uploaded document(s), with real page numbers. This is the ONLY source for tender facts when a document is attached.
+- "LIVE TENDER RECORDS" / "CURRENTLY SCOPED TENDER" = Tender FMS database entries (some fields were auto-filled earlier and may be wrong). Use them for workflow/status questions. If you use them for a tender fact, cite "Tender FMS record" — never give them a PDF page number — and if they disagree with the document, report both.
 
 ### STRICT DOCUMENT-BASED ANSWERING RULES (MOST IMPORTANT):
-1. ZERO HALLUCINATION & ZERO ASSUMPTION:
-   - Ground your answers SOLELY and EXCLUSIVELY in the provided "EXTRACTED GROUND-TRUTH DOCUMENT SECTIONS" and "LIVE TENDER RECORDS".
-   - Do NOT add any information, assumptions, imaginary data, or extrapolate from external internet / pre-trained knowledge.
-   - Jo information document mein available hai, sirf wahi answer mein deni hai.
+1. ANSWER ONLY ACCORDING TO THE UPLOADED DOCUMENT:
+   - Ground your answers SOLELY and EXCLUSIVELY in the provided "EXTRACTED GROUND-TRUTH DOCUMENT SECTIONS" (and, for workflow/status questions, "LIVE TENDER RECORDS").
+   - Never guess, extrapolate, or hallucinate answers.
+   - Never generate answers using your own assumptions, general knowledge, or external information.
+   - Never add information that is not explicitly available or logically supported by the uploaded document.
+   - Do not modify, manipulate, or interpret facts beyond what the document actually states.
+   - Accuracy is strictly more important than creativity. Document evidence is more important than AI assumptions.
 
 2. MANDATORY ABSENCE RULE:
    - If the requested information is not found in the uploaded document, you MUST explicitly state:
      "${NOT_FOUND_DISCLAIMER}"
-   - If information on a page is unclear, illegible, or incomplete, explicitly state:
-     "The content on [Document Name], Page [X] is unclear or unreadable."
+   - If the answer could be on a page listed under "EXTRACTION STATUS: PAGES THAT COULD NOT BE READ", reply:
+     "${EXTRACTION_INCOMPLETE_DISCLAIMER}" and name those pages.
+   - If information on a page is unclear, illegible, or incomplete (e.g. low-confidence OCR), explicitly state:
+     "The content on [Document Name], Page [X] is unclear or incomplete."
+   - Keep these situations separate: (a) not mentioned in the document, (b) page could not be extracted, (c) document not attached.
 
-3. VERBATIM NUMBERS, DATES & SPELLINGS:
-   - Values, dates, amounts, percentages, units, and table values must be returned EXACTLY as written in the document.
-   - Do NOT round off, convert units, or modify dates, spellings, or figures.
+3. EXACT FACTS, NUMBERS, DATES & SPELLINGS:
+   - Values, dates, names, technical terms, clauses, amounts, percentages, units, and table values must be returned EXACTLY as written in the document.
+   - Do NOT round off, convert units, or modify dates, spellings, or figures. Preserve the original meaning exactly.
 
-4. MANDATORY EXACT PAGE NUMBER & SOURCE CITATION:
-   - For every factual answer, provide the exact source reference at the end:
-     - For PDF / Word: **Source:** [Document Name], Page [X] (or Section: "[Section Title]")
-     - For Excel: **Source:** [Document Name], Sheet: "[Sheet Name]", Cell: [Cell Reference]
-   - Example:
-     Question: What is the total project cost?
-     Answer: ₹25,50,000
-     **Source:** Uploaded_Tender.pdf, Page 45.
+4. MANDATORY ANSWER FORMAT WITH EXACT PAGE NUMBER & SOURCE CITATION:
+   For every tender-fact answer use this structure:
+     **Answer:** <the value / requirement exactly as written>
+     **Source:** [Document Name], Page [X], [Clause / Section number or title as printed]
+     **Supporting Evidence:** "<verbatim quote copied from that page>"
+   - Page numbers MUST be the PAGE numbers shown in the "=== [DOCUMENT ... | PAGE: X" headers (physical PDF page), not page numbers printed inside the text.
+   - For Word files cite the section (no page numbers exist). For Excel: **Source:** [Document Name], Sheet: "[Sheet Name]", Cell: [Cell Reference]
+   - If information is found across multiple pages, give one Source line per page.
+   - The quote must be copied character-for-character from the passage; do not paraphrase inside quotes.
+   - Never generate fake page references or citations. Do NOT write a "Verification Status" yourself; the system adds it.
 
 5. ADVANCED CROSS-PAGE READING & CONFLICT RESOLUTION:
    - If information spans multiple pages, cite all relevant pages.
@@ -223,9 +242,48 @@ export async function POST(request: Request) {
     const allChunks: DocumentPageChunk[] = []
     const imageFiles: any[] = []
     let totalDocumentPages = 0
+    const usage = new UsageTracker()
+    const evidenceWarnings: string[] = []
+    // index scope (tender id or chat scope) → index ids, for tender-scoped vector search
+    const indexScopes = new Map<string, string[]>()
+    const loadedIndexIds = new Set<string>()
+
+    const addIndexed = async (indexId: string, scopeId: string, label?: string) => {
+      if (loadedIndexIds.has(indexId)) return
+      const { data: row, error } = await supabase
+        .from('document_index')
+        .select('id,tender_id,doc_name,doc_hash,page_count,pages_done,status')
+        .eq('id', indexId)
+        .maybeSingle()
+      if (error || !row) {
+        evidenceWarnings.push(`Indexed document ${label || indexId} could not be loaded${error ? ` (${error.message})` : ''}.`)
+        return
+      }
+      // A document indexed for another tender / chat is never used here.
+      if (row.tender_id !== scopeId) {
+        evidenceWarnings.push(`Document "${row.doc_name}" belongs to a different tender scope and was not used.`)
+        return
+      }
+      const pages = await loadIndexedPages(row.id)
+      allChunks.push(...pagesToChunks({ indexId: row.id, docHash: row.doc_hash, docName: row.doc_name }, pages))
+      totalDocumentPages += row.page_count || pages.length
+      if (row.pages_done < (row.page_count || 0)) {
+        evidenceWarnings.push(`"${row.doc_name}" is only partly indexed (${row.pages_done}/${row.page_count} pages).`)
+      }
+      loadedIndexIds.add(row.id)
+      indexScopes.set(scopeId, [...(indexScopes.get(scopeId) || []), row.id])
+    }
 
     if (Array.isArray(files) && files.length > 0) {
       for (const f of files) {
+        if (f.indexId && f.indexScopeId) {
+          try {
+            await addIndexed(f.indexId, f.indexScopeId, f.name)
+          } catch (e: any) {
+            evidenceWarnings.push(`"${f.name}" could not be loaded from the document index: ${e?.message || e}`)
+          }
+          continue
+        }
         if (f.pageCount) totalDocumentPages += f.pageCount
 
         if (Array.isArray(f.chunks) && f.chunks.length > 0) {
@@ -248,12 +306,71 @@ export async function POST(request: Request) {
       }
     }
 
-    // 3. Run Hybrid Context Retrieval for 200-500+ Pages
-    const retrieval = retrieveContextForQuery(userQuery, allChunks, 25000)
+    // 2b. Scoped tender: automatically use ITS tender document and corrigenda
+    if (cleanCurrentTender?.id && currentTender) {
+      // First check stored indexes
+      const wanted = new Set<string>(
+        [currentTender.tenderDoc?.dataUrl, currentTender.tenderDoc?.name, ...(currentTender.corrigenda || []).map((c: any) => c?.fileUrl || c?.dataUrl || c?.fileName)].filter(
+          Boolean
+        )
+      )
+      if (wanted.size) {
+        try {
+          const rows = await findTenderIndexes(String(cleanCurrentTender.id), ['tender', 'corrigendum'])
+          for (const r of rows) {
+            if ((r.source_url && wanted.has(r.source_url)) || (r.doc_name && wanted.has(r.doc_name))) {
+              await addIndexed(r.id, String(cleanCurrentTender.id), r.doc_name)
+            }
+          }
+        } catch (e: any) {
+          evidenceWarnings.push(`Tender document index lookup failed: ${e?.message || e}`)
+        }
+      }
+
+      // If no chunks loaded yet, auto-load via loadTenderEvidence (reads Image_Module_Tender PDF natively)
+      if (allChunks.length === 0) {
+        try {
+          const { loadTenderEvidence } = await import('@/lib/tender-evidence')
+          const evidence = await loadTenderEvidence(cleanCurrentTender, { usage, timeBudgetMs: 60000 })
+          if (evidence.chunks.length > 0) {
+            allChunks.push(...evidence.chunks)
+            totalDocumentPages += evidence.chunks.length
+          }
+        } catch (err: any) {
+          console.warn('Could not auto-load scoped tender evidence:', err?.message || err)
+        }
+      }
+    }
+
+    // 3. Hybrid retrieval (BM25 + pgvector) for 200-500+ pages
+    // Short follow-ups ("and the EMD?") inherit the previous question's terms so
+    // retrieval still targets the right clauses.
+    const prevUserQuery =
+      [...messages].reverse().filter((m: any) => m.role === 'user')[1]?.content || ''
+    const retrievalQuery =
+      userQuery.split(/\s+/).length < 8 && prevUserQuery ? `${userQuery} ${prevUserQuery}` : userQuery
+    let semantic: Map<string, number> | undefined
+    if (indexScopes.size && process.env.OPENAI_API_KEY) {
+      semantic = new Map()
+      for (const [scopeId, ids] of indexScopes) {
+        try {
+          const m = await semanticScores(scopeId, ids, retrievalQuery, usage)
+          m.forEach((v, k) => semantic!.set(k, v))
+        } catch (e: any) {
+          evidenceWarnings.push(`Semantic search unavailable (${e?.message || e}); keyword search only.`)
+        }
+      }
+    }
+    const retrieval = retrieveContextForQuery(retrievalQuery, allChunks, 25000, { semanticScores: semantic })
     let filesContext = ''
 
     if (allChunks.length > 0) {
       filesContext = `\n\n${retrieval.formattedContext}`
+      if (evidenceWarnings.length) {
+        filesContext += `### DOCUMENT LOADING NOTES\n${evidenceWarnings.map(w => `- ${w}`).join('\n')}\n`
+      }
+    } else if (evidenceWarnings.length) {
+      filesContext = `\n\n### DOCUMENT LOADING PROBLEMS (no document text is available)\n${evidenceWarnings.map(w => `- ${w}`).join('\n')}\nTell the user the document could not be read; do not answer document questions from memory.\n`
     } else if (files.length > 0) {
       // Fallback text if no chunks
       filesContext = '\n\nATTACHED USER DOCUMENTS FOR ANALYSIS:\n'
@@ -273,20 +390,51 @@ export async function POST(request: Request) {
       try {
         const openai = createOpenAI({ apiKey })
 
+        // Collect all multimodal visual assets: standalone image files + top retrieved scanned PDF page images.
+        // Unreadable scanned pages (OCR failed) are also sent as images when few enough,
+        // so their content is not silently lost.
+        const scannedImages = [
+          ...retrieval.retrievedChunks.filter(
+            c => c.isScanned && typeof c.dataUrl === 'string' && c.dataUrl.startsWith('data:image')
+          ),
+          ...allChunks.filter(
+            c =>
+              c.content.startsWith('[EXTRACTION FAILED') &&
+              typeof c.dataUrl === 'string' &&
+              c.dataUrl.startsWith('data:image')
+          ),
+        ]
+          .filter((c, i, arr) => arr.findIndex(x => x.id === c.id) === i)
+          .slice(0, 4)
+
+        const allVisualImages = [
+          ...imageFiles,
+          ...scannedImages.map(c => ({
+            name: `${c.docName} (Page ${c.pageNumber || 1})`,
+            dataUrl: c.dataUrl!,
+          })),
+        ]
+
         // Format history for LLM
         const formattedMessages = messages.map((m, idx) => {
           const isLatest = idx === messages.length - 1
 
-          // If latest message has images, format as multi-modal content
-          if (isLatest && m.role === 'user' && imageFiles.length > 0) {
+          // If latest message has images or scanned pages, format as multi-modal content
+          if (isLatest && m.role === 'user' && allVisualImages.length > 0) {
             const contentParts: any[] = [
-              { type: 'text', text: m.content || 'Please analyze this attached image/document strictly.' },
+              { type: 'text', text: m.content || 'Please analyze this attached document and answer strictly based on its content.' },
             ]
-            imageFiles.forEach(img => {
-              contentParts.push({
-                type: 'image',
-                image: img.dataUrl,
-              })
+            allVisualImages.forEach(img => {
+              if (img.dataUrl) {
+                contentParts.push({
+                  type: 'text',
+                  text: `[Image of: ${img.name} — cite exactly this document/page when using it]`,
+                })
+                contentParts.push({
+                  type: 'image',
+                  image: img.dataUrl,
+                })
+              }
             })
             return {
               role: 'user' as const,
@@ -309,35 +457,84 @@ export async function POST(request: Request) {
           temperature: 0.1, // Low temperature for strict factual accuracy
         })
 
-        if (result && result.text) {
-          // 5. Run Strict Grounding Verification Layer
-          const verification = verifyResponseAccuracy(result.text, retrieval.retrievedChunks)
+        if (!result?.text) {
+          throw new Error('OpenAI returned an empty answer.')
+        }
+        usage.add('chat', modelName, result.usage as any)
 
-          return NextResponse.json({
-            reply: result.text,
-            grounded: verification.isVerified,
-            model: modelName,
-            sources: verification.verifiedSources,
-            verification: {
-              confidence: verification.confidence,
-              isVerified: verification.isVerified,
-              auditNotes: verification.auditNotes,
-              unverifiedClaims: verification.unverifiedClaims,
-            },
-            conflicts: retrieval.conflicts,
-            totalPagesAnalyzed: retrieval.totalDocumentPagesAnalyzed || totalDocumentPages,
-            chunksAnalyzed: retrieval.totalChunksAnalyzed,
-            sourceCount: tenders.length,
-            analyzedFiles: files.length,
-            scopedTenderId: cleanCurrentTender?.id,
+        // 5. Verification: deterministic checks against the retrieved original text,
+        //    then (only when those cannot decide) an independent OpenAI audit whose
+        //    quotes are themselves checked verbatim (proposal E).
+        const hasDocs = allChunks.length > 0
+        let verification = hasDocs ? verifyResponseAccuracy(result.text, retrieval.retrievedChunks) : null
+        if (verification) {
+          verification = await runSemanticVerification({
+            question: userQuery,
+            answer: result.text,
+            deterministic: verification,
+            retrieved: retrieval.retrievedChunks,
+            usage,
           })
         }
+
+        let reply = result.text
+        if (verification) {
+          const label =
+            verification.status === 'verified'
+              ? 'Verified against the uploaded document'
+              : verification.status === 'verified-scanned'
+              ? 'Verified against a machine-read scan (OCR/Vision) – confirm on the original page'
+              : verification.status === 'evidence-not-found'
+              ? 'Evidence not found in the uploaded document'
+              : verification.status === 'extraction-incomplete'
+              ? 'Document extraction incomplete – manual verification required'
+              : 'NOT verified – one or more statements could not be matched to the cited pages; check the original PDF'
+          reply += `\n\n---\n**Verification Status:** ${label}`
+        }
+        console.info('[tender-query] usage', JSON.stringify(usage.toJSON()))
+
+        return NextResponse.json({
+          reply,
+          grounded: verification ? verification.isVerified : false,
+          model: modelName,
+          sources: verification?.verifiedSources || [],
+          verification: verification
+            ? {
+                status: verification.status,
+                confidence: verification.confidence,
+                isVerified: verification.isVerified,
+                auditNotes: verification.auditNotes,
+                unverifiedClaims: verification.unverifiedClaims,
+                semanticCheck: verification.semanticCheck,
+              }
+            : undefined,
+          retrievalMode: semantic && semantic.size ? 'hybrid (BM25 + vector)' : 'keyword (BM25)',
+          documentWarnings: evidenceWarnings,
+          usage: usage.toJSON(),
+          conflicts: retrieval.conflicts,
+          unreadablePages: retrieval.unreadablePages,
+          extractionIncomplete: (retrieval.unreadablePages?.length || 0) > 0,
+          totalPagesAnalyzed: retrieval.totalDocumentPagesAnalyzed || totalDocumentPages,
+          chunksAnalyzed: retrieval.totalChunksAnalyzed,
+          sourceCount: tenders.length,
+          analyzedFiles: files.length,
+          scopedTenderId: cleanCurrentTender?.id,
+        })
       } catch (aiErr: any) {
-        console.warn('OpenAI generateText warning (falling back to local engine):', aiErr?.message || aiErr)
+        // Never substitute a keyword-snippet answer for a failed AI call.
+        console.error('OpenAI tender-query call failed:', aiErr?.message || aiErr)
+        return NextResponse.json(
+          {
+            error: 'The AI service could not answer this question right now. No answer was generated – please retry.',
+            details: aiErr?.message || 'OpenAI request failed',
+          },
+          { status: 502 }
+        )
       }
     }
 
-    // 6. Fallback to Local Engine if OpenAI is unavailable
+    // 6. No API key configured: show the matching passages only, clearly labelled
+    //    as unverified raw text (not an AI answer).
     const fallbackResult = handleFallbackResponse(
       userQuery,
       tenders,
@@ -348,8 +545,10 @@ export async function POST(request: Request) {
     )
 
     return NextResponse.json({
-      reply: fallbackResult.reply,
-      grounded: true,
+      reply:
+        '> ⚠️ AI service is not configured (OPENAI_API_KEY missing). Below is the best-matching raw passage only – it is NOT a verified answer.\n\n' +
+        fallbackResult.reply,
+      grounded: false,
       model: 'tender-fms-local-engine',
       sources: fallbackResult.sources,
       totalPagesAnalyzed: retrieval.totalDocumentPagesAnalyzed || totalDocumentPages,

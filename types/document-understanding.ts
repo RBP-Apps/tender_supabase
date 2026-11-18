@@ -13,13 +13,24 @@ export interface DocumentPageChunk {
   sheetName?: string
   cellRange?: string
   sectionTitle?: string
+  clauseOrRef?: string
   content: string
   charCount: number
   isScanned?: boolean
+  /** Tesseract mean confidence (0-100) for OCR pages; undefined for digital text */
+  ocrConfidence?: number
   hasTables?: boolean
+  tableData?: string[][]
+  dataUrl?: string // Base64 rendered page image for vision multimodal understanding
   rowStart?: number
   rowEnd?: number
   keywords?: string[]
+  /** BM25-based retrieval score assigned at query time */
+  relevanceScore?: number
+  /** How the page text was obtained: text | ocr | vision | text+ocr | text+vision | ocr+vision | failed */
+  extractionMethod?: string
+  /** Extraction quality flags (e.g. low-ocr-confidence, vision-extra-content-unconfirmed) */
+  qualityFlags?: string[]
 }
 
 /**
@@ -31,6 +42,7 @@ export interface DocumentSourceCitation {
   sheetName?: string
   cellRef?: string
   sectionTitle?: string
+  clauseOrRef?: string
   snippet?: string
   relevanceScore?: number
 }
@@ -40,6 +52,18 @@ export interface DocumentSourceCitation {
  */
 export interface DocumentVerificationResult {
   isVerified: boolean
+  /** verified | verified-scanned | not-verified | evidence-not-found | extraction-incomplete */
+  status?: 'verified' | 'verified-scanned' | 'not-verified' | 'evidence-not-found' | 'extraction-incomplete'
+  /** number of numeric/date/amount/quote facts machine-checked */
+  factChecks?: number
+  /** retrieved chunks the answer validly cites */
+  citedChunks?: DocumentPageChunk[]
+  /** result of the independent OpenAI verification pass (proposal E), when it ran */
+  semanticCheck?: {
+    ran: boolean
+    verdict: 'supported' | 'unsupported' | 'partially-supported' | 'missed-evidence' | 'no-claims' | 'error'
+    notes: string
+  }
   confidence: 'high' | 'medium' | 'low' | 'unsupported'
   verifiedSources: DocumentSourceCitation[]
   unverifiedClaims?: string[]
@@ -73,6 +97,13 @@ export interface ProcessingProgress {
   message?: string
 }
 
+export interface DocumentSectionMapItem {
+  sectionTitle: string
+  startPage: number
+  endPage?: number
+  clauses?: string[]
+}
+
 /**
  * Complete parsed document payload including extracted chunks
  */
@@ -88,6 +119,10 @@ export interface ParsedDocumentResult {
   sheetCount?: number
   rowCount?: number
   isScanned?: boolean
+  executiveSummary?: string
+  documentMap?: DocumentSectionMapItem[]
+  /** PDF page numbers whose text could not be extracted (scanned w/o OCR, parse errors, over limit) */
+  unreadablePages?: number[]
   chunks: DocumentPageChunk[]
 }
 

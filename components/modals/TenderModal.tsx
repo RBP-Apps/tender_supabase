@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState } from 'react'
+import React, { useState, useRef, useEffect } from 'react'
 import { FileCheck, Info } from 'lucide-react';
 import {
   AlertCircle,
@@ -17,7 +17,6 @@ import {
   FileUp,
   Flame,
   History,
-  Loader2,
   Plus,
   Sparkles,
   Trash2,
@@ -224,11 +223,22 @@ export function TenderModal({
     setBid('technicalComponents', bid.technicalComponents.filter((_, i) => i !== index))
 
   const [extracting, setExtracting] = useState(false)
+  const [extractProgress, setExtractProgress] = useState(0)
   const [extractMessage, setExtractMessage] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null)
+  const extractTimerRef = useRef<NodeJS.Timeout | null>(null)
 
   // Corrigendum Feature State
   const [corrigendumExtracting, setCorrigendumExtracting] = useState(false)
+  const [corrigendumProgress, setCorrigendumProgress] = useState(0)
   const [corrigendumMessage, setCorrigendumMessage] = useState<{ tone: 'ok' | 'error' | 'warn'; text: string } | null>(null)
+  const corrigendumTimerRef = useRef<NodeJS.Timeout | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (extractTimerRef.current) clearInterval(extractTimerRef.current)
+      if (corrigendumTimerRef.current) clearInterval(corrigendumTimerRef.current)
+    }
+  }, [])
   const [activeCorrigendumId, setActiveCorrigendumId] = useState<string | null>(null)
   const [showCorrigendumReview, setShowCorrigendumReview] = useState(false)
   const [selectedChanges, setSelectedChanges] = useState<Record<string, boolean>>({})
@@ -321,12 +331,15 @@ export function TenderModal({
 
   const handleCorrigendumUpload = async (file: File | undefined, replaceCorrId?: string) => {
     if (!file) return
+    if (corrigendumTimerRef.current) clearInterval(corrigendumTimerRef.current)
     setCorrigendumExtracting(true)
+    setCorrigendumProgress(15)
     setCorrigendumMessage(null)
     setAppliedFeedback(null)
     try {
       const dataUrl = await readFileAsDataUrl(file)
       let finalUrl = dataUrl
+      setCorrigendumProgress(28)
 
       try {
         const uploadRes = await uploadToSupabaseBucket({
@@ -342,6 +355,15 @@ export function TenderModal({
       } catch (uploadErr) {
         console.warn('Corrigendum bucket upload fallback:', uploadErr)
       }
+      setCorrigendumProgress(42)
+
+      corrigendumTimerRef.current = setInterval(() => {
+        setCorrigendumProgress(prev => {
+          if (prev >= 95) return prev
+          const step = prev < 65 ? 4 : prev < 85 ? 2 : 1
+          return Math.min(prev + step, 95)
+        })
+      }, 350)
 
       const body = new FormData()
       body.append('file', file)
@@ -365,6 +387,9 @@ export function TenderModal({
       const res = await fetch('/api/extract-corrigendum', { method: 'POST', body })
       const json = await res.json().catch(() => ({}))
       if (!res.ok || !json.data) throw new Error(json.error || 'Could not analyze the Corrigendum PDF.')
+      
+      if (corrigendumTimerRef.current) clearInterval(corrigendumTimerRef.current)
+      setCorrigendumProgress(98)
       const data = json.data as CorrigendumExtraction
 
       const newRecordId = replaceCorrId || `corr-${Date.now()}`
@@ -442,13 +467,20 @@ export function TenderModal({
           ? `Analyzed “${file.name}”. ⚠️ Note: Corrigendum quotes tender ref "${data.tenderRef}", differing from RfS No "${form.bid?.rfsNo}". Please review carefully.`
           : `Analyzed “${file.name}”: Identified ${changesWithIds.length} update(s) for ${updatedRecord.corrigendumNo}. Review and apply changes below.`,
       })
+      setCorrigendumProgress(100)
     } catch (err) {
+      if (corrigendumTimerRef.current) clearInterval(corrigendumTimerRef.current)
+      setCorrigendumProgress(0)
       setCorrigendumMessage({
         tone: 'error',
         text: err instanceof Error ? err.message : 'Could not analyze the Corrigendum PDF.',
       })
     } finally {
-      setCorrigendumExtracting(false)
+      if (corrigendumTimerRef.current) clearInterval(corrigendumTimerRef.current)
+      setTimeout(() => {
+        setCorrigendumExtracting(false)
+        setCorrigendumProgress(0)
+      }, 650)
     }
   }
 
@@ -596,12 +628,15 @@ export function TenderModal({
 
   const handlePdfUpload = async (file: File | undefined) => {
     if (!file) return
+    if (extractTimerRef.current) clearInterval(extractTimerRef.current)
     setExtracting(true)
+    setExtractProgress(15)
     setExtractMessage(null)
     try {
       // 1. Read file as base64 dataUrl immediately
       const dataUrl = await readFileAsDataUrl(file)
       let finalUrl = dataUrl
+      setExtractProgress(28)
 
       // 2. Upload to Supabase bucket if configured
       try {
@@ -618,6 +653,7 @@ export function TenderModal({
       } catch (err) {
         console.warn('Storage bucket upload fallback:', err)
       }
+      setExtractProgress(45)
 
       const tenderDocItem = {
         id: `nit-${Date.now()}`,
@@ -630,12 +666,24 @@ export function TenderModal({
         referenceNote: 'Official NIT / Tender Document uploaded at New Tender creation',
       }
 
-      // 3. Extract tender details with AI
+      // 3. Extract tender details with AI (progress smoothly climbs from 45% to 95%)
+      extractTimerRef.current = setInterval(() => {
+        setExtractProgress(prev => {
+          if (prev >= 95) return prev
+          const step = prev < 65 ? 4 : prev < 85 ? 2 : 1
+          return Math.min(prev + step, 95)
+        })
+      }, 350)
+
       const body = new FormData()
       body.append('file', file)
       const res = await fetch('/api/extract-tender', { method: 'POST', body })
       const json = await res.json().catch(() => ({}))
       if (!res.ok || !json.data) throw new Error(json.error || 'Could not read the PDF.')
+
+      if (extractTimerRef.current) clearInterval(extractTimerRef.current)
+      setExtractProgress(98)
+
       const extracted = json.data as TenderExtraction
       const { filled } = applyExtraction(form, extracted, masters)
 
@@ -647,14 +695,21 @@ export function TenderModal({
         }
       })
 
+      setExtractProgress(100)
       setExtractMessage({
         tone: 'ok',
         text: `Filled ${filled} field${filled === 1 ? '' : 's'} from “${file.name}”. Document saved and associated with Tender.`,
       })
     } catch (err) {
+      if (extractTimerRef.current) clearInterval(extractTimerRef.current)
+      setExtractProgress(0)
       setExtractMessage({ tone: 'error', text: err instanceof Error ? err.message : 'Could not read the PDF.' })
     } finally {
-      setExtracting(false)
+      if (extractTimerRef.current) clearInterval(extractTimerRef.current)
+      setTimeout(() => {
+        setExtracting(false)
+        setExtractProgress(0)
+      }, 650)
     }
   }
 
@@ -713,7 +768,13 @@ export function TenderModal({
   return (
     <>
     <div className="modal-backdrop">
-      <div className={showBidDetails ? 'modal modal-wide' : 'modal'}>
+      <div
+        className={showBidDetails ? 'modal modal-wide' : 'modal'}
+        style={{
+          width: showBidDetails ? 'min(1180px, 96vw)' : undefined,
+          maxWidth: showBidDetails ? '96vw' : undefined,
+        }}
+      >
         <div className="modal-head">
           <div>
             <p className="eyebrow">
@@ -868,8 +929,8 @@ export function TenderModal({
                 <div className="pdf-upload-container">
                   {/* Column 1: Tender PDF Auto-fill */}
                   <div className="pdf-autofill">
-                    <div className="flex items-center gap-2 text-sm font-bold text-blue-900">
-                      <Sparkles className="w-4 h-4 text-blue-600" /> Auto-fill from Tender PDF (AI)
+                    <div className="flex items-center gap-2 text-sm font-bold text-blue-900 whitespace-nowrap">
+                      <Sparkles className="w-4 h-4 text-blue-600 shrink-0" /> Auto-fill from Tender PDF (AI)
                     </div>
                     <p className="text-xs text-blue-900/70 -mt-1">
                       Upload the tender / NIT / RfS PDF and the fields below (and every generated document) will be filled
@@ -892,26 +953,45 @@ export function TenderModal({
                               </span>
                             </div>
                           </div>
-                          <span className="badge badge-emerald text-[10px] px-2 py-0.5 whitespace-nowrap">
+                          <span className="badge badge-emerald text-[10px] px-2 py-0.5 whitespace-nowrap shrink-0">
                             Attached
                           </span>
                         </div>
 
-                        <div className="flex items-center gap-2 pt-1 border-t border-blue-100 flex-wrap">
+                        {extracting && (
+                          <div className="bg-blue-100/70 border border-blue-200 rounded-lg px-2.5 py-1.5 flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-2 flex-1 min-w-0">
+                              <span className="text-[11px] font-semibold text-blue-900 whitespace-nowrap">
+                                AI Reading PDF:
+                              </span>
+                              <div className="flex-1 bg-white/80 rounded-full h-2 overflow-hidden border border-blue-200 min-w-[60px]">
+                                <div
+                                  className="bg-blue-600 h-full rounded-full transition-all duration-300 ease-out"
+                                  style={{ width: `${extractProgress}%` }}
+                                />
+                              </div>
+                            </div>
+                            <span className="text-xs font-bold text-blue-700 tabular-nums shrink-0">
+                              {extractProgress}%
+                            </span>
+                          </div>
+                        )}
+
+                        <div className="flex items-center gap-2 pt-1 border-t border-blue-100 flex-wrap sm:flex-nowrap">
                           {form.tenderDoc.dataUrl && (
                             <button
                               type="button"
                               onClick={handlePdfView}
-                              className="text-xs text-blue-700 hover:text-blue-900 font-semibold flex items-center gap-1 px-2 py-1 rounded hover:bg-blue-100/60"
+                              className="text-xs text-blue-700 hover:text-blue-900 font-semibold flex items-center gap-1 px-2 py-1 rounded hover:bg-blue-100/60 whitespace-nowrap"
                               title="View uploaded PDF"
                             >
                               <Eye className="w-3.5 h-3.5" /> View PDF
                             </button>
                           )}
 
-                          <label className="text-xs text-indigo-700 hover:text-indigo-900 font-semibold flex items-center gap-1 px-2 py-1 rounded hover:bg-indigo-100/60 cursor-pointer">
+                          <label className="text-xs text-indigo-700 hover:text-indigo-900 font-semibold flex items-center gap-1 px-2 py-1 rounded hover:bg-indigo-100/60 cursor-pointer whitespace-nowrap">
                             <FileUp className="w-3.5 h-3.5" />
-                            {extracting ? 'Replacing…' : 'Edit / Replace PDF'}
+                            {extracting ? `Replacing (${extractProgress}%)` : 'Edit / Replace PDF'}
                             <input
                               type="file"
                               accept="application/pdf"
@@ -928,7 +1008,7 @@ export function TenderModal({
                           <button
                             type="button"
                             onClick={handlePdfDelete}
-                            className="text-xs text-red-600 hover:text-red-800 font-semibold flex items-center gap-1 px-2 py-1 rounded hover:bg-red-50 ml-auto"
+                            className="text-xs text-red-600 hover:text-red-800 font-semibold flex items-center gap-1 px-2 py-1 rounded hover:bg-red-50 ml-auto whitespace-nowrap"
                             title="Delete Tender PDF"
                           >
                             <Trash2 className="w-3.5 h-3.5" /> Delete PDF
@@ -937,9 +1017,9 @@ export function TenderModal({
                       </div>
                     ) : (
                       <div className="flex items-center gap-3">
-                        <label className="secondary-button cursor-pointer text-xs">
+                        <label className="secondary-button cursor-pointer text-xs whitespace-nowrap">
                           <FileUp className="w-4 h-4" />
-                          {extracting ? 'Reading & Uploading PDF…' : 'Upload Tender PDF'}
+                          {extracting ? `Reading PDF (${extractProgress}%)` : 'Upload Tender PDF'}
                           <input
                             type="file"
                             accept="application/pdf"
@@ -952,7 +1032,19 @@ export function TenderModal({
                             }}
                           />
                         </label>
-                        {extracting && <Loader2 className="w-4 h-4 animate-spin text-blue-600" />}
+                        {extracting && (
+                          <div className="flex items-center gap-2">
+                            <div className="w-24 sm:w-28 bg-blue-100 rounded-full h-2 overflow-hidden border border-blue-200">
+                              <div
+                                className="bg-blue-600 h-full rounded-full transition-all duration-300 ease-out"
+                                style={{ width: `${extractProgress}%` }}
+                              />
+                            </div>
+                            <span className="text-xs font-bold text-blue-700 tabular-nums shrink-0">
+                              {extractProgress}%
+                            </span>
+                          </div>
+                        )}
                       </div>
                     )}
 
@@ -965,12 +1057,12 @@ export function TenderModal({
 
                   {/* Column 2: Corrigendum PDF Analysis */}
                   <div className="pdf-corrigendum">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2 text-sm font-bold text-purple-950">
-                        <FileText className="w-4 h-4 text-purple-600" /> Corrigendum (AI)
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 text-sm font-bold text-purple-950 whitespace-nowrap">
+                        <FileText className="w-4 h-4 text-purple-600 shrink-0" /> Corrigendum (AI)
                       </div>
                       {corrigenda.length > 0 && (
-                        <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-purple-200 text-purple-900">
+                        <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-purple-200 text-purple-900 whitespace-nowrap shrink-0">
                           {corrigenda.length} Corrigend{corrigenda.length === 1 ? 'um' : 'a'}
                         </span>
                       )}
@@ -978,24 +1070,133 @@ export function TenderModal({
                     <p className="text-xs text-purple-950/70 -mt-1">
                       Upload corrigendum / amendment PDFs to detect deadline extensions, revised EMD, scope changes, and clarifications.
                     </p>
-                    <div className="flex items-center gap-3">
-                      <label className="secondary-button cursor-pointer text-xs border-purple-200 text-purple-900 hover:bg-purple-100/60">
-                        <FileUp className="w-4 h-4 text-purple-600" />
-                        {corrigendumExtracting ? 'Analyzing Corrigendum…' : 'Upload Corrigendum PDF'}
-                        <input
-                          type="file"
-                          accept="application/pdf"
-                          className="hidden"
-                          disabled={corrigendumExtracting}
-                          onChange={e => {
-                            const file = e.target.files?.[0]
-                            e.target.value = ''
-                            handleCorrigendumUpload(file)
-                          }}
-                        />
-                      </label>
-                      {corrigendumExtracting && <Loader2 className="w-4 h-4 animate-spin text-purple-600" />}
-                    </div>
+
+                    {activeCorrigendum ? (
+                      <div className="bg-purple-50/90 border border-purple-200 rounded-lg p-3 space-y-2 mt-1">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex items-start gap-2.5 min-w-0">
+                            <div className="w-8 h-8 rounded bg-purple-100 text-purple-600 grid place-items-center flex-shrink-0 mt-0.5">
+                              <FileText className="w-4 h-4" />
+                            </div>
+                            <div className="min-w-0">
+                              <span className="text-xs font-bold text-slate-800 block truncate" title={activeCorrigendum.fileName}>
+                                {activeCorrigendum.fileName}
+                              </span>
+                              <span className="text-[11px] text-slate-500 block">
+                                {formatBytes(activeCorrigendum.fileSize ?? undefined)} • {activeCorrigendum.corrigendumNo} {activeCorrigendum.issueDate ? `(${activeCorrigendum.issueDate})` : ''}
+                              </span>
+                            </div>
+                          </div>
+                          <span className="badge badge-purple text-[10px] px-2 py-0.5 whitespace-nowrap bg-purple-100 text-purple-800 border border-purple-200 font-semibold shrink-0">
+                            {activeCorrigendum.changes.length} Change{activeCorrigendum.changes.length === 1 ? '' : 's'}
+                          </span>
+                        </div>
+
+                        {corrigendumExtracting && (
+                          <div className="bg-purple-100/70 border border-purple-200 rounded-lg px-2.5 py-1.5 flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-2 flex-1 min-w-0">
+                              <span className="text-[11px] font-semibold text-purple-900 whitespace-nowrap">
+                                AI Analyzing Corrigendum:
+                              </span>
+                              <div className="flex-1 bg-white/80 rounded-full h-2 overflow-hidden border border-purple-200 min-w-[60px]">
+                                <div
+                                  className="bg-purple-600 h-full rounded-full transition-all duration-300 ease-out"
+                                  style={{ width: `${corrigendumProgress}%` }}
+                                />
+                              </div>
+                            </div>
+                            <span className="text-xs font-bold text-purple-700 tabular-nums shrink-0">
+                              {corrigendumProgress}%
+                            </span>
+                          </div>
+                        )}
+
+                        <div className="flex items-center gap-2 pt-1 border-t border-purple-100 flex-wrap sm:flex-nowrap">
+                          {(activeCorrigendum.fileUrl || activeCorrigendum.dataUrl) && (
+                            <button
+                              type="button"
+                              onClick={() => handleCorrigendumView(activeCorrigendum)}
+                              className="text-xs text-purple-700 hover:text-purple-900 font-semibold flex items-center gap-1 px-2 py-1 rounded hover:bg-purple-100/60 whitespace-nowrap"
+                              title="View Corrigendum PDF"
+                            >
+                              <Eye className="w-3.5 h-3.5" /> View PDF
+                            </button>
+                          )}
+
+                          <label className="text-xs text-purple-700 hover:text-purple-900 font-semibold flex items-center gap-1 px-2 py-1 rounded hover:bg-purple-100/60 cursor-pointer whitespace-nowrap">
+                            <FileUp className="w-3.5 h-3.5" />
+                            {corrigendumExtracting ? `Replacing (${corrigendumProgress}%)` : 'Replace PDF'}
+                            <input
+                              type="file"
+                              accept="application/pdf"
+                              className="hidden"
+                              disabled={corrigendumExtracting}
+                              onChange={e => {
+                                const file = e.target.files?.[0]
+                                e.target.value = ''
+                                handleCorrigendumUpload(file, activeCorrigendum.id)
+                              }}
+                            />
+                          </label>
+
+                          <label className="text-xs text-indigo-700 hover:text-indigo-900 font-semibold flex items-center gap-1 px-2 py-1 rounded hover:bg-indigo-50 cursor-pointer whitespace-nowrap" title="Add another corrigendum">
+                            <Plus className="w-3.5 h-3.5" /> Add
+                            <input
+                              type="file"
+                              accept="application/pdf"
+                              className="hidden"
+                              disabled={corrigendumExtracting}
+                              onChange={e => {
+                                const file = e.target.files?.[0]
+                                e.target.value = ''
+                                handleCorrigendumUpload(file)
+                              }}
+                            />
+                          </label>
+
+                          <button
+                            type="button"
+                            onClick={() => handleCorrigendumDelete(activeCorrigendum.id)}
+                            className="text-xs text-red-600 hover:text-red-800 font-semibold flex items-center gap-1 px-2 py-1 rounded hover:bg-red-50 ml-auto whitespace-nowrap"
+                            title="Delete Corrigendum"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" /> Delete
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-3">
+                        <label className="secondary-button cursor-pointer text-xs border-purple-200 text-purple-900 hover:bg-purple-100/60 whitespace-nowrap">
+                          <FileUp className="w-4 h-4 text-purple-600" />
+                          {corrigendumExtracting ? `Analyzing (${corrigendumProgress}%)` : 'Upload Corrigendum PDF'}
+                          <input
+                            type="file"
+                            accept="application/pdf"
+                            className="hidden"
+                            disabled={corrigendumExtracting}
+                            onChange={e => {
+                              const file = e.target.files?.[0]
+                              e.target.value = ''
+                              handleCorrigendumUpload(file)
+                            }}
+                          />
+                        </label>
+                        {corrigendumExtracting && (
+                          <div className="flex items-center gap-2">
+                            <div className="w-24 sm:w-28 bg-purple-100 rounded-full h-2 overflow-hidden border border-purple-200">
+                              <div
+                                className="bg-purple-600 h-full rounded-full transition-all duration-300 ease-out"
+                                style={{ width: `${corrigendumProgress}%` }}
+                              />
+                            </div>
+                            <span className="text-xs font-bold text-purple-700 tabular-nums shrink-0">
+                              {corrigendumProgress}%
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
                     {corrigendumMessage && (
                       <p
                         className={
@@ -1030,7 +1231,7 @@ export function TenderModal({
                                     setActiveCorrigendumId(c.id)
                                     setShowCorrigendumReview(true)
                                   }}
-                                  className="px-2 py-1 flex items-center gap-1 font-medium"
+                                  className="px-2 py-1 flex items-center gap-1 font-medium whitespace-nowrap"
                                 >
                                   <span>{c.corrigendumNo || `Corr-${idx + 1}`}</span>
                                   <span className={isActive ? 'text-purple-200 text-[10px]' : 'text-purple-600 font-bold text-[10px]'}>
@@ -1059,7 +1260,7 @@ export function TenderModal({
                         <button
                           type="button"
                           onClick={() => setShowCorrigendumReview(prev => !prev)}
-                          className="text-xs text-purple-700 hover:text-purple-900 font-semibold underline"
+                          className="text-xs text-purple-700 hover:text-purple-900 font-semibold underline whitespace-nowrap ml-auto"
                         >
                           {showCorrigendumReview ? 'Hide Review' : 'Review Changes'}
                         </button>
@@ -1109,7 +1310,7 @@ export function TenderModal({
                           title="Replace PDF file for this Corrigendum"
                         >
                           <FileUp className="w-3.5 h-3.5" />
-                          {corrigendumExtracting ? 'Uploading…' : 'Replace PDF'}
+                          {corrigendumExtracting ? `Uploading (${corrigendumProgress}%)` : 'Replace PDF'}
                           <input
                             type="file"
                             accept="application/pdf"

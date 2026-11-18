@@ -280,20 +280,24 @@ export function collectAllTenderDocuments(tender: Tender): DocumentDossierSummar
   // 5. STAGE 5: EMD READY PAYMENT & BANK ACCOUNTS
   if (tender.emdReady) {
     const emd = tender.emdReady
-    const emdDocTitle = `EMD Payment Receipt (${emd.utrNumber || 'UTR Verification'})`
+    const emdDocTitle = emd.generatedDocument?.formatTitle || `EMD Payment Receipt (${emd.utrNumber || 'UTR Verification'})`
+    const emdFileName = emd.generatedDocument?.pdfFileName || `EMD_Payment_${emd.utrNumber || tender.id}.pdf`
+    const emdFileUrl = emd.generatedDocument?.pdfDataUrl || undefined
+
     docs.push({
       id: `emd-receipt-${tender.id}`,
       title: emdDocTitle,
       category: 'emd-payment',
       categoryLabel: 'EMD Payment & Bank Guarantee (Stage 05)',
       stageOrigin: 'EMD Ready',
-      fileName: `EMD_Payment_${emd.utrNumber || tender.id}.pdf`,
+      fileName: emdFileName,
       fileType: 'application/pdf',
       fileTypeGroup: 'pdf',
+      dataUrl: emdFileUrl,
       uploadedAt: emd.date || emd.completedAt || new Date().toISOString(),
       source: 'auto-fetched',
-      sourceLabel: 'Verified EMD Record',
-      referenceNote: `UTR: ${emd.utrNumber} · Amount: ${emd.amount} · Date: ${emd.date}`,
+      sourceLabel: emd.generatedDocument ? 'Official EMD Proforma PDF' : 'Verified EMD Record',
+      referenceNote: `UTR: ${emd.utrNumber || 'Pending'} · Amount: ${emd.amount} · Date: ${emd.date || 'Pending'}`,
       remarks: emd.remarks,
       metadata: {
         amount: emd.amount,
@@ -304,6 +308,25 @@ export function collectAllTenderDocuments(tender: Tender): DocumentDossierSummar
         selfAccount: emd.selfAccount,
       },
     })
+
+    if (emd.generatedDocument?.docxDataUrl) {
+      docs.push({
+        id: `emd-docx-${tender.id}`,
+        title: `${emdDocTitle} (Word .docx)`,
+        category: 'emd-payment',
+        categoryLabel: 'EMD Payment & Bank Guarantee (Stage 05)',
+        stageOrigin: 'EMD Ready',
+        fileName: emd.generatedDocument.docxFileName || `EMD_Document_${tender.id}.docx`,
+        fileType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        fileTypeGroup: 'doc',
+        dataUrl: emd.generatedDocument.docxDataUrl,
+        uploadedAt: emd.date || emd.completedAt || new Date().toISOString(),
+        source: 'auto-fetched',
+        sourceLabel: 'Official EMD Word Document',
+        referenceNote: `Editable Word Template · Amount: ${emd.amount}`,
+        remarks: emd.remarks,
+      })
+    }
   }
 
   // 6. SYSTEM-GENERATED BID SUBMISSION DOCUMENTS
