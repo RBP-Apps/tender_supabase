@@ -245,11 +245,13 @@ export function autoFetchSampleDetails(tender: Tender): AutoFetchResult {
     // Match 1: MAF Letter
     // Keywords: maf, authoriz, oem, manufacturer, dealership OR matches identified makes
     const hasMake = makesLower.some(m => nameLower.includes(m))
+    // Word-boundary matching: plain substring checks wrongly hit e.g. "oem" in "poem",
+    // "lab" in "available/table", "pod" in "episode", "bis" in "Biswas".
     const isMafKeyword =
-      nameLower.includes('maf') ||
-      nameLower.includes('authoriz') ||
-      nameLower.includes('oem') ||
-      nameLower.includes('manufacturer')
+      /(^|[^a-z])maf([^a-z]|$)/.test(nameLower) ||
+      /authori[sz]/.test(nameLower) ||
+      /(^|[^a-z])oem([^a-z]|$)/.test(nameLower) ||
+      /manufacturer/.test(nameLower)
     
     if (isMafKeyword || (hasMake && (nameLower.includes('letter') || nameLower.includes('form')))) {
       const matchedMake = result.detectedContext.makes.find(m => nameLower.includes(m.toLowerCase()))
@@ -268,16 +270,12 @@ export function autoFetchSampleDetails(tender: Tender): AutoFetchResult {
 
     // Match 2: Test Report
     // Keywords: test, lab, type_test, nabl, erda, cpri, testing, inspection, report
-    const hasStandard = standardsLower.some(s => nameLower.includes(s))
+    const hasStandard = standardsLower.some(s => s.length >= 4 && nameLower.includes(s))
     const isTestKeyword =
-      nameLower.includes('test') ||
-      nameLower.includes('lab') ||
-      nameLower.includes('type_test') ||
-      nameLower.includes('testing') ||
-      nameLower.includes('nabl') ||
-      nameLower.includes('erda') ||
-      nameLower.includes('cpri') ||
-      nameLower.includes('inspection_report')
+      /(^|[^a-z])(test|testing|stc|iec)([^a-z]|$)/.test(nameLower) ||
+      /(^|[^a-z])lab(oratory)?([^a-z]|$)/.test(nameLower) ||
+      /(^|[^a-z])(nabl|erda|cpri)([^a-z]|$)/.test(nameLower) ||
+      /inspection[\s_-]*report/.test(nameLower)
 
     if (isTestKeyword || hasStandard) {
       const reason = hasStandard
@@ -296,12 +294,9 @@ export function autoFetchSampleDetails(tender: Tender): AutoFetchResult {
     // Match 3: BIS Certificate
     // Keywords: bis, crs, standard, is_, isi, iso, license, compulsory_reg
     const isBisKeyword =
-      nameLower.includes('bis') ||
-      nameLower.includes('crs') ||
-      nameLower.includes('is_') ||
-      nameLower.includes('isi') ||
-      nameLower.includes('registration_scheme') ||
-      nameLower.includes('bis_license')
+      /(^|[^a-z])(bis|crs|isi|almm)([^a-z]|$)/.test(nameLower) ||
+      /(^|[^a-z])is[\s_-]?\d{3,5}/.test(nameLower) ||
+      /registration[\s_-]*scheme/.test(nameLower)
 
     if (isBisKeyword) {
       const reason = `Matched BIS / CRS Compliance Certificate (${doc.origin})`
@@ -317,13 +312,9 @@ export function autoFetchSampleDetails(tender: Tender): AutoFetchResult {
     // Match 4: Product Sample
     // Keywords: sample, product_sample, courier, dispatch, receipt, pod, tracking, photo
     const isSampleKeyword =
-      nameLower.includes('sample') ||
-      nameLower.includes('courier') ||
-      nameLower.includes('dispatch') ||
-      nameLower.includes('pod') ||
-      nameLower.includes('receipt') ||
-      nameLower.includes('tracking') ||
-      nameLower.includes('sample_photo')
+      /sample/.test(nameLower) ||
+      /courier|dispatch|receipt|tracking/.test(nameLower) ||
+      /(^|[^a-z])pod([^a-z]|$)/.test(nameLower)
 
     if (isSampleKeyword) {
       const reason = `Matched Product Sample Submission / Courier Receipt (${doc.origin})`

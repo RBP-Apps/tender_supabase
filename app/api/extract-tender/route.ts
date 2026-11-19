@@ -2,13 +2,14 @@ import { generateText, NoObjectGeneratedError, Output } from 'ai'
 import { createOpenAI } from '@ai-sdk/openai'
 import { NextResponse } from 'next/server'
 import { tenderExtractionSchema } from '@/lib/tender-extraction-schema'
+import { extractPdfPageTexts, validateAndFillExtraction, normalizeExtraction } from '@/lib/tender-validation-agent'
 
 export const runtime = 'nodejs'
-export const maxDuration = 120
+export const maxDuration = 300
 
 const MAX_PDF_BYTES = 25 * 1024 * 1024
-// Flagship OpenAI model used in the SDK's own PDF + Structured Outputs examples.
-const DEFAULT_MODEL = 'gpt-6-astra'
+// Used only when OPENAI_MODEL is not set in .env.local (must be a model that accepts PDF input).
+const DEFAULT_MODEL = 'gpt-4o'
 
 const INSTRUCTIONS =
   'You extract structured data from Indian government tender documents (NIT / RfS / RFP / bid documents). ' +
@@ -52,8 +53,9 @@ export async function POST(request: Request) {
   const data = new Uint8Array(await file.arrayBuffer())
 
   try {
+    const modelName = process.env.OPENAI_MODEL || DEFAULT_MODEL
     const { output } = await generateText({
-      model: openai(process.env.OPENAI_MODEL || DEFAULT_MODEL),
+      model: openai(modelName),
       system: INSTRUCTIONS,
       output: Output.object({ schema: tenderExtractionSchema }),
       messages: [
@@ -66,7 +68,21 @@ export async function POST(request: Request) {
         },
       ],
     })
-    return NextResponse.json({ data: output })
+    // Validation agent: cross-check against the PDF text, recover empty fields with
+    // page-level proof, and report what is still missing. Never blocks pass-1 data.
+    try {
+      normalizeExtraction(output)
+      const pages = await extractPdfPageTexts(data)
+      const { extraction, report } = await validateAndFillExtraction({
+        extraction: output,
+        pages,
+        model: openai(process.env.OPENAI_VALIDATION_MODEL || modelName),
+      })
+      return NextResponse.json({ data: extraction, validation: report })
+    } catch (vErr) {
+      console.warn('[extract-tender] validation agent failed, returning pass-1 data:', vErr)
+      return NextResponse.json({ data: output, validation: null })
+    }
   } catch (err) {
     if (NoObjectGeneratedError.isInstance(err)) {
       return NextResponse.json(
