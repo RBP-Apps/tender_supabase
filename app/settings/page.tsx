@@ -1520,6 +1520,36 @@ export default function SettingsPage() {
                   notify={notify}
                 />
 
+                {/* Company identity printed on every generated document */}
+                <CompanyDocUploadCard
+                  stepNum="FIELD 03A"
+                  id="panDoc"
+                  title="PAN Card"
+                  subtitle="RBP PAN card. The PAN number below is printed in every generated bid document."
+                  doc={companyDocs?.panDoc}
+                  valueLabel="PAN Number"
+                  valuePlaceholder="e.g. ABCDE1234F"
+                  notesLabel="Notes"
+                  notesPlaceholder="Optional"
+                  onSave={doc => saveCompanyDoc('panDoc', doc)}
+                  onPreview={(doc, title) => setPreviewDoc({ ...doc, title })}
+                  notify={notify}
+                />
+                <CompanyDocUploadCard
+                  stepNum="FIELD 03B"
+                  id="gstDoc"
+                  title="GST Registration Certificate"
+                  subtitle="RBP GST certificate. The GST number below is printed in every generated bid document."
+                  doc={companyDocs?.gstDoc}
+                  valueLabel="GST Number"
+                  valuePlaceholder="e.g. 22ABCDE1234F1Z5"
+                  notesLabel="Notes"
+                  notesPlaceholder="Optional"
+                  onSave={doc => saveCompanyDoc('gstDoc', doc)}
+                  onPreview={(doc, title) => setPreviewDoc({ ...doc, title })}
+                  notify={notify}
+                />
+
                 {/* Field 4: Signature and Seal (Dual Upload Card: Signer Image/PDF & Seal Image/PDF) */}
                 <SignatureAndSealCard
                   signatureDoc={companyDocs?.signatureDoc}

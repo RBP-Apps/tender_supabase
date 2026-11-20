@@ -287,6 +287,8 @@ export async function saveCompanyDocToSupabase(
       signatureDoc: 'Authorised Signatory / Signature',
       sealDoc: 'Company Seal / Stamp',
       signatureSealDoc: 'Company Signature and Seal',
+      panDoc: 'PAN Card',
+      gstDoc: 'GST Registration Certificate',
     }
 
     let finalFileUrl = doc.dataUrl || null

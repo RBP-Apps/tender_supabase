@@ -36,7 +36,9 @@ export function SubmissionChecklist({ doc }: { doc: DocData }) {
 
   const envelopeTwo = [
     'Format-1: General Particulars of the Bidder (signed).',
-    `Certificate of Incorporation + name-change certificate (${COMPANY.formerName} → Rotomag Enertec Ltd.).`,
+    COMPANY.formerName
+      ? `Certificate of Incorporation + name-change certificate (${COMPANY.formerName} → ${COMPANY.name}).`
+      : 'Certificate of Incorporation.',
     'Memorandum & Articles of Association (MoA / AoA).',
     'GST Registration Certificate and PAN card.',
     'Format-2: General particulars / covering letter (copy).',
@@ -61,7 +63,7 @@ export function SubmissionChecklist({ doc }: { doc: DocData }) {
       <h2 className="text-center font-bold text-green-700 text-xl mb-6">BID SUBMISSION CHECKLIST / INDEX</h2>
       <p className="mb-2 text-sm">RfS No.: {doc.rfsFull}.</p>
       <p className="mb-2 text-sm">
-        Bidder: {COMPANY.name} (formerly {COMPANY.formerName}) — Individual Bidder (single entity).
+        Bidder: {COMPANY.name}{COMPANY.formerName ? ` (formerly ${COMPANY.formerName})` : ''} — Individual Bidder (single entity).
       </p>
       <p className="mb-2 text-sm">Packages: {doc.packagesLabel}.</p>
       <p className="mb-6 text-sm font-bold">Bid Deadline: {doc.deadline}</p>

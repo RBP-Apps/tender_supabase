@@ -299,6 +299,8 @@ export interface CompanyMasterDocuments {
   signatureDoc?: CompanyDocumentItem | null
   sealDoc?: CompanyDocumentItem | null
   signatureSealDoc?: CompanyDocumentItem | null
+  panDoc?: CompanyDocumentItem | null
+  gstDoc?: CompanyDocumentItem | null
 }
 
 export interface BankAccountDetails {

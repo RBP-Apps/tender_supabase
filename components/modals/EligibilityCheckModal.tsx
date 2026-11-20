@@ -443,7 +443,7 @@ export function EligibilityCheckModal({
     if (existing?.checklistItems && Array.isArray(existing.checklistItems) && existing.checklistItems.length > 0) {
       return existing.checklistItems
     }
-    return DEFAULT_TENDER_ELIGIBILITY_DOCS
+    return []
   })
   const [checklistLoading, setChecklistLoading] = useState(false)
   const [checklistPercent, setChecklistPercent] = useState<number>(0)
@@ -530,8 +530,13 @@ export function EligibilityCheckModal({
       const docName = tender.tenderDoc?.name || 'Image_Module_Tender_11f1aec243f3da04a696b42e99c9ac7b.pdf'
       const docSource = tender.tenderDoc?.dataUrl || `/docs/${docName}`
 
+      // Send only what the checklist API reads (id, tender PDF, corrigenda). The full tender
+      // object carries every uploaded file as base64 and can exceed the host's request-size limit.
       const targetTender = {
-        ...tender,
+        id: tender.id,
+        title: tender.title,
+        authority: tender.authority,
+        corrigenda: tender.corrigenda,
         tenderDoc: {
           name: docName,
           dataUrl: docSource,
@@ -592,8 +597,13 @@ export function EligibilityCheckModal({
         const docName = tender.tenderDoc?.name || 'Image_Module_Tender_11f1aec243f3da04a696b42e99c9ac7b.pdf'
         const docSource = tender.tenderDoc?.dataUrl || `/docs/${docName}`
 
+        // Send only what the checklist API reads (id, tender PDF, corrigenda). The full tender
+        // object carries every uploaded file as base64 and can exceed the host's request-size limit.
         const targetTender = {
-          ...tender,
+          id: tender.id,
+          title: tender.title,
+          authority: tender.authority,
+          corrigenda: tender.corrigenda,
           tenderDoc: {
             name: docName,
             dataUrl: docSource,
@@ -661,6 +671,13 @@ export function EligibilityCheckModal({
       setChecklistItems(tender.eligibilityCheck.checklistItems)
     }
   }, [tender.eligibilityCheck?.aiVerification, tender.eligibilityCheck?.checklistItems])
+
+  // Sections 1 & 2 already cover vendor registration, turnover / net worth and experience,
+  // so "Other Supporting Documents" lists only the remaining documents the tender asks for.
+  const COVERED_ELSEWHERE = /vendor\s*\/?\s*(dept|department)?\s*reg|registration\s+(with|certificate)|turn\s*-?\s*over|net\s*-?\s*worth|experience|work\s*completion|completion\s*certificate|performance\s*certificate/i
+  const otherChecklistItems = checklistItems.filter(
+    item => !item.matchingCompanyDocKey && !COVERED_ELSEWHERE.test(item.documentName)
+  )
 
   const getAttachedForChecklist = (itemName: string): EligibilityDocument | null => {
     const directMatch = otherDocsList.find(d => 
@@ -1119,7 +1136,7 @@ export function EligibilityCheckModal({
                     3. Other Supporting Documents For Eligibility
                   </span>
                   <span className="px-2 py-0.5 rounded-full font-bold text-[10px] bg-blue-100 text-blue-800 border border-blue-300 flex items-center gap-1 shadow-2xs">
-                    <Sparkles className="w-3 h-3 text-blue-600" /> AI Requirement Analysis ({checklistItems.length} Documents)
+                    <Sparkles className="w-3 h-3 text-blue-600" /> AI Requirement Analysis ({otherChecklistItems.length} Documents)
                   </span>
                 </div>
                 <p className="text-[11px] text-slate-600 mt-1">
@@ -1229,21 +1246,21 @@ export function EligibilityCheckModal({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {checklistItems.length === 0 && (
+                    {otherChecklistItems.length === 0 && (
                       <tr>
                         <td colSpan={5} className="py-4 px-3 text-center text-[11px] text-slate-500">
-                          {checklistLoading ? 'AI is reading the tender document and extracting required eligibility checklists…' : 'No checklist extracted yet for this tender.'}
+                          {checklistLoading ? 'AI is reading the tender document and extracting required eligibility checklists…' : checklistItems.length > 0 ? 'No other documents required beyond sections 1 and 2.' : 'No checklist extracted yet for this tender.'}
                         </td>
                       </tr>
                     )}
-                    {checklistItems.map(item => {
+                    {otherChecklistItems.map((item, displayIdx) => {
                       const attached = getAttachedForChecklist(item.documentName)
                       const hasCompanyDoc = item.matchingCompanyDocKey && companyDocs?.[item.matchingCompanyDocKey]
 
                       return (
                         <tr key={item.sNo} className="hover:bg-blue-50/40 transition-colors">
                           <td className="py-2 px-2.5 text-center font-bold text-slate-600">
-                            {item.sNo}
+                            {displayIdx + 1}
                           </td>
                           <td className="py-2 px-3">
                             <span className="font-bold text-slate-900 block leading-snug">
@@ -1257,7 +1274,7 @@ export function EligibilityCheckModal({
                           </td>
                           <td className="py-2 px-3 hidden sm:table-cell text-slate-600 text-[11px]">
                             <span className="inline-flex items-center gap-1 font-mono text-[10px] bg-slate-100 px-1.5 py-0.5 rounded text-slate-700">
-                              📄 {item.pageNumber} • {item.clauseOrSection}
+                              📄 {item.pageNumber}{item.clauseOrSection && !/^[\d\s.—-]+$/.test(item.clauseOrSection) ? ` • ${item.clauseOrSection}` : ''}
                             </span>
                             {item.quoteVerified === true && (
                               <span className="block text-[9px] font-semibold text-emerald-700 mt-0.5">✓ quote verified in PDF</span>

@@ -7,27 +7,29 @@ export const CELL = 'border border-black p-1 break-words hyphens-auto'
 export const HEAD_ROW = 'bg-green-700 text-white'
 
 export const DocumentHeader = () => (
-  <div className="flex justify-between items-start mb-10 border-b-[3px] border-[#C6D22A]/50 pb-6">
-    <div className="space-y-1">
-      <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight">{COMPANY.name}</h1>
-      <p className="text-xs text-slate-500 font-medium">(Formerly known as {COMPANY.formerName})</p>
-      <p className="text-xs text-slate-500 font-medium">CIN : {COMPANY.cin}</p>
-      <p className="text-xs text-slate-500 mt-2">Regd. Office : {COMPANY.address}</p>
-      <p className="text-xs text-slate-500">
-        Tel. : {COMPANY.phone} • <span className="text-blue-500">{COMPANY.email}</span> •{' '}
-        <span className="text-blue-500">{COMPANY.website}</span>
-      </p>
+  <div className="flex justify-between items-center mb-8 border-b-2 border-slate-900 pb-4">
+    <div className="flex items-center gap-3.5">
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={COMPANY.logoUrl} alt="RBP Logo" className="h-12 w-auto object-contain" crossOrigin="anonymous" />
+      <h1 className="text-lg font-extrabold text-slate-950 uppercase tracking-wide">{COMPANY.name}</h1>
     </div>
-    <div className="flex items-center gap-3">
-      <div className="w-12 h-12 bg-blue-50 rounded-xl flex items-center justify-center border-2 border-blue-200 shadow-sm">
-        <div className="w-8 h-8 rounded-full border-[5px] border-t-green-500 border-r-blue-500 border-b-yellow-500 border-l-blue-400"></div>
-      </div>
-      <div>
-        <div className="text-3xl font-black italic text-[#8CC63F] tracking-tighter drop-shadow-sm">ROTOMAG</div>
-        <div className="text-xs italic text-blue-500 font-semibold mt-0.5">
-          water <span className="text-green-500">energy</span> <span className="text-slate-400">motion</span>
-        </div>
-      </div>
+  </div>
+)
+
+// Same peach footer banner on every generated document page.
+export const DocumentFooter = () => (
+  <div
+    className="absolute left-0 right-0 bottom-0 px-8 py-2.5 flex items-center justify-between gap-4 text-[10px] leading-snug border-t"
+    style={{ backgroundColor: '#FCD497', borderColor: '#E8B975', color: '#42372A' }}
+  >
+    <div>
+      <p><strong>Regd. Office:</strong> {COMPANY.regdOfficeLine1}</p>
+      <p>{COMPANY.regdOfficeLine2}</p>
+    </div>
+    <div className="h-8 w-px opacity-70" style={{ backgroundColor: '#B8925E' }} />
+    <div>
+      <p><strong>e:</strong> {COMPANY.email} &nbsp;|&nbsp; <strong>w:</strong> {COMPANY.website}</p>
+      <p><strong>Sales:</strong> {COMPANY.salesPhone} &nbsp;|&nbsp; <strong>Service:</strong> {COMPANY.servicePhone}</p>
     </div>
   </div>
 )
@@ -49,6 +51,8 @@ export const A4Page = ({ children, letterhead = true }: { children: React.ReactN
   <div className="a4-page bg-white w-[210mm] min-h-[297mm] mx-auto p-12 shadow-[0_20px_50px_-12px_rgba(0,0,0,0.15)] mb-16 text-sm text-slate-800 leading-relaxed font-sans border border-slate-200 rounded-sm relative overflow-hidden">
     {letterhead && <DocumentHeader />}
     {children}
+    {letterhead && <div className="h-16" />}
+    {letterhead && <DocumentFooter />}
   </div>
 )
 

@@ -2,19 +2,33 @@
 // Tender-specific values come from Tender.bid instead.
 
 export const COMPANY = {
-  name: 'ROTOMAG ENERTEC LIMITED',
-  formerName: 'Rotomag Motors and Controls Pvt. Ltd.',
-  cin: 'U34100GJ1993PLC020063',
-  address: '2102/3 & 4, GIDC Estate, Vitthal Udyognagar, Anand – 388 121, Gujarat, India',
-  phone: '9227110023/24',
-  email: 'mail@rotomag.com',
-  website: 'www.rotomag.com',
-  yearOfIncorporation: '1993',
-  pan: 'AAACR9061K',
-  gst: '______________ (to be filled)',
+  name: 'RBP ENERGY INDIA PRIVATE LIMITED',
+  formerName: '',
+  cin: '',
+  address: '303 Guru Ghasidas Plaza, Amapara, G.E Road, Raipur (C.G) - 492 001',
+  regdOfficeLine1: '303 Guru Ghasidas Plaza',
+  regdOfficeLine2: 'Amapara, G.E Road, Raipur (C.G) - 492 001',
+  phone: '92000 12500',
+  salesPhone: '92000 12500',
+  servicePhone: '92000 12400',
+  email: 'info@rbpindia.com',
+  website: 'rbpindia.com',
+  logoUrl: '/Logo.PNG',
+  place: 'Raipur, Chhattisgarh',
+  yearOfIncorporation: '',
+  // PAN / GST come from the Master table (Settings -> Company documents). Until they are
+  // saved there these stay blank so documents never print a made-up number.
+  pan: '',
+  gst: '',
   signatory: 'Mr. Anirudha Singh',
   signatoryDesignation: 'Authorised Signatory',
-  managingDirector: 'Umesh Balani, Managing Director — DIN 00273387',
+  managingDirector: '',
+}
+
+/** Push PAN / GST saved in the Master table into the shared company identity used by every document. */
+export function applyCompanyMaster(master?: { panDoc?: { value?: string } | null; gstDoc?: { value?: string } | null } | null) {
+  COMPANY.pan = master?.panDoc?.value?.trim() || ''
+  COMPANY.gst = master?.gstDoc?.value?.trim() || ''
 }
 
 export const CA_FIRM = {

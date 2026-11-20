@@ -1978,7 +1978,7 @@ Format your response in structured markdown:
                                 </div>
                                 <p className="text-slate-600 text-[10px] pt-0.5">
                                   Date: <strong className="text-slate-900">{date || new Date().toISOString().slice(0, 10)}</strong>
-                                  <span className="ml-1 text-blue-700 font-bold">• Page 1 of 2</span>
+                                  
                                 </p>
                               </div>
                             </div>
@@ -1987,14 +1987,12 @@ Format your response in structured markdown:
                             <div className="space-y-3 flex-1 my-2 overflow-hidden flex flex-col justify-between text-[10.5px]">
                               {/* Title */}
                               <div className="text-center py-1 space-y-1 flex-shrink-0">
-                                <span className="inline-block px-3 py-0.5 rounded-full bg-blue-50 text-blue-800 border border-blue-200 text-[9px] font-extrabold uppercase tracking-widest">
-                                  Official Tender Prescribed Annexure
-                                </span>
+                                
                                 <h2 className="font-extrabold text-sm text-slate-950 uppercase tracking-wide">
                                   {editedDoc?.formatTitle || 'PROFORMA FOR EARNEST MONEY DEPOSIT (EMD) VERIFICATION & UNDERTAKING'}
                                 </h2>
                                 <p className="text-[9.5px] italic text-slate-500">
-                                  ({editedDoc?.formatSource || 'Format derived directly from Original Tender NIT PDF'})
+                                  ({editedDoc?.formatSource || 'As per Tender NIT'})
                                 </p>
                               </div>
 
@@ -2013,10 +2011,7 @@ Format your response in structured markdown:
                                 </div>
                               </div>
 
-                              {/* Preamble */}
-                              <p className="text-[10px] text-slate-800 leading-relaxed text-justify flex-shrink-0">
-                                Dear Sir / Madam, With reference to the above-captioned tender and in compliance with the instructions stipulated in the Tender NIT, we, <strong>{RBP_COMPANY.name}</strong>, hereby submit the confirmation and particulars of the requisite Earnest Money Deposit (EMD) remitted through official online electronic banking transfer. The certified particulars of the transaction and designated bank accounts are detailed below:
-                              </p>
+                              
 
                               {/* Table 1: EMD Payment Particulars */}
                               <div className="space-y-0.5 flex-shrink-0">
@@ -2110,9 +2105,20 @@ Format your response in structured markdown:
                                 </table>
                               </div>
 
-                              <p className="text-[9.5px] italic text-slate-500 text-right">
-                                (Bidder undertakings, compliance declarations &amp; signatures on Page 2) →
-                              </p>
+                              
+                              {/* Signature block (single-page format) */}
+                              <div className="pt-3 flex items-end justify-between gap-6 flex-shrink-0">
+                                <div className="space-y-0.5 text-[10.5px] text-slate-700">
+                                  <p><strong>Place:</strong> {RBP_COMPANY.place}</p>
+                                  <p><strong>Date:</strong> {date || new Date().toISOString().slice(0, 10)}</p>
+                                </div>
+                                <div className="text-right space-y-0.5">
+                                  <p className="text-[10.5px] text-slate-900 font-bold">For {RBP_COMPANY.name}</p>
+                                  <p className="text-[10.5px] font-semibold text-slate-800">{editedDoc?.signatoryName || RBP_COMPANY.signatory}</p>
+                                  <p className="text-[10px] text-slate-500">{editedDoc?.signatoryDesignation || RBP_COMPANY.signatoryDesignation}</p>
+                                  <p className="text-[11px] font-bold text-slate-950 pt-3">(Sign &amp; Seal of the bidder)</p>
+                                </div>
+                              </div>
                             </div>
 
                             {/* Page 1 Footer */}
@@ -2149,136 +2155,6 @@ Format your response in structured markdown:
                             </div>
                           </div>
 
-                          {/* PAGE 2 OF 2 */}
-                          <div
-                            className="emd-a4-page bg-white shadow-2xl rounded-xs border border-slate-300 text-slate-900 font-sans flex flex-col justify-between"
-                            style={{
-                              width: '210mm',
-                              minHeight: '297mm',
-                              maxHeight: '297mm',
-                              height: '297mm',
-                              padding: '8mm 12mm',
-                              boxSizing: 'border-box',
-                              overflow: 'hidden',
-                              backgroundColor: '#ffffff',
-                            }}
-                          >
-                            {/* Page 2 Header */}
-                            <div className="border-b-2 border-slate-900 pb-3 flex items-center justify-between gap-4 flex-shrink-0">
-                              <div className="flex items-center gap-3.5">
-                                <img
-                                  src="/Logo.PNG"
-                                  alt="RBP Logo"
-                                  className="h-11 sm:h-12 w-auto object-contain flex-shrink-0"
-                                  crossOrigin="anonymous"
-                                />
-                                <div>
-                                  <h1 className="font-extrabold text-base text-slate-950 uppercase tracking-wide leading-tight">
-                                    {RBP_COMPANY.name}
-                                  </h1>
-                                </div>
-                              </div>
-
-                              <div className="text-right flex-shrink-0 text-[10px] space-y-0.5 font-sans">
-                                <div className="inline-block bg-slate-100 border border-slate-300 rounded px-2.5 py-1 font-mono text-slate-800 font-bold">
-                                  REF: {editedDoc?.tenderRefNo || tender.id}
-                                </div>
-                                <p className="text-slate-600 text-[10px] pt-0.5">
-                                  Date: <strong className="text-slate-900">{date || new Date().toISOString().slice(0, 10)}</strong>
-                                  <span className="ml-1 text-blue-700 font-bold">• Page 2 of 2</span>
-                                </p>
-                              </div>
-                            </div>
-
-                            {/* Page 2 Body: Declarations, Remarks, Signatory & Seal */}
-                            <div className="space-y-4 flex-1 my-3 overflow-hidden flex flex-col justify-between text-[11px]">
-                              {/* Section 4: Full Detailed Declarations */}
-                              <div className="space-y-1.5 flex-shrink-0">
-                                <div className="bg-slate-800 text-white px-3 py-1 rounded-t text-[10px] font-bold tracking-wider uppercase">
-                                  4. Bidder Undertakings &amp; Statutory Compliance Declarations
-                                </div>
-                                <div className="p-3 bg-slate-50/80 border border-slate-200 rounded-b space-y-2 text-[10.5px] text-slate-800 leading-relaxed">
-                                  {editedDoc?.declarations.map((decl, idx) => (
-                                    <div key={idx} className="flex items-start gap-2">
-                                      <span className="font-bold text-blue-900 flex-shrink-0">({idx + 1})</span>
-                                      <span>{decl}</span>
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-
-                              {/* Remarks & Notes */}
-                              {(editedDoc?.customNotes || remarks) && (
-                                <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-[10.5px] text-slate-800 flex-shrink-0">
-                                  <strong className="text-slate-900">Additional Remarks / Notes: </strong>
-                                  <span>{editedDoc?.customNotes || remarks}</span>
-                                </div>
-                              )}
-
-                              {/* Complete Signature Block */}
-                              <div className="pt-4 flex items-end justify-between gap-6 flex-wrap flex-shrink-0">
-                                <div className="space-y-1 text-xs">
-                                  <p className="text-slate-600">
-                                    <strong>Place:</strong> {RBP_COMPANY.place}
-                                  </p>
-                                  <p className="text-slate-600">
-                                    <strong>Date:</strong> {date || new Date().toISOString().slice(0, 10)}
-                                  </p>
-                                </div>
-
-                                <div className="text-right space-y-1">
-                                  <p className="text-xs text-slate-900 font-bold">
-                                    For {RBP_COMPANY.name}
-                                  </p>
-                                  <p className="text-xs font-semibold text-slate-800">
-                                    {editedDoc?.signatoryName || RBP_COMPANY.signatory}
-                                  </p>
-                                  <p className="text-[11px] text-slate-500">
-                                    {editedDoc?.signatoryDesignation || RBP_COMPANY.signatoryDesignation}
-                                  </p>
-                                </div>
-                              </div>
-                            </div>
-
-                            {/* Page 2 Footer with Sign & Seal and Peach Banner */}
-                            <div className="w-full flex-shrink-0 mt-auto pt-2 space-y-2">
-                              <div className="text-right pb-1">
-                                <p className="font-serif sm:font-sans font-bold text-sm text-slate-950 tracking-tight">
-                                  (Sign &amp; Seal of the bidder)
-                                </p>
-                              </div>
-
-                              <div
-                                className="w-full px-5 py-2.5 rounded-xs flex items-center justify-between gap-4 text-[9.5px] sm:text-[10px] leading-snug border"
-                                style={{
-                                  backgroundColor: '#FCD497',
-                                  borderColor: '#E8B975',
-                                  color: '#42372A',
-                                }}
-                              >
-                                <div className="space-y-0.5 text-left">
-                                  <p>
-                                    <strong className="font-bold text-[#2E2419]">Regd. Office:</strong> 303 Guru Ghasidas Plaza
-                                  </p>
-                                  <p className="text-[#3E3326]">Amapara, G.E Road, Raipur (C.G) - 492 001</p>
-                                </div>
-
-                                <div
-                                  className="h-8 w-[1.5px] opacity-70 flex-shrink-0"
-                                  style={{ backgroundColor: '#B8925E' }}
-                                />
-
-                                <div className="space-y-0.5 text-left">
-                                  <p>
-                                    <strong className="font-bold text-[#2E2419]">e:</strong> info@rbpindia.com &nbsp;|&nbsp; <strong className="font-bold text-[#2E2419]">w:</strong> rbpindia.com
-                                  </p>
-                                  <p>
-                                    <strong className="font-bold text-[#2E2419]">Sales:</strong> 92000 12500 &nbsp;|&nbsp; <strong className="font-bold text-[#2E2419]">Service:</strong> 92000 12400
-                                  </p>
-                                </div>
-                              </div>
-                            </div>
-                          </div>
                     </div>
                   </div>
                 )}

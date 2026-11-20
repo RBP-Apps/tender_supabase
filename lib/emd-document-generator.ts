@@ -497,26 +497,6 @@ export async function generateEmdDocx(
     })
   )
 
-  // Salutation & Intro
-  bodyParagraphs.push(
-    new Paragraph({
-      spacing: { after: 120 },
-      children: [
-        new TextRun({ text: 'Dear Sir / Madam,', size: 20, font: 'Arial' }),
-      ],
-    }),
-    new Paragraph({
-      spacing: { after: 180 },
-      children: [
-        new TextRun({
-          text: `In accordance with the conditions of the aforementioned tender, we, M/s ${RBP_COMPANY.name}, have deposited the requisite Earnest Money Deposit (EMD) amount via electronic bank transfer (RTGS / NEFT). The complete details of the transaction and respective bank accounts are certified below:`,
-          size: 19,
-          font: 'Arial',
-        }),
-      ],
-    })
-  )
-
   // Helper to create key-value table rows
   const createTableRow = (label: string, value: string, isHeader = false) => {
     return new TableRow({
@@ -631,34 +611,6 @@ export async function generateEmdDocx(
       ],
     })
   )
-
-  // SECTION 4: BIDDER DECLARATIONS & UNDERTAKINGS
-  bodyParagraphs.push(
-    new Paragraph({
-      spacing: { before: 220, after: 100 },
-      children: [
-        new TextRun({
-          text: '4. BIDDER UNDERTAKINGS & COMPLIANCE DECLARATIONS',
-          bold: true,
-          size: 19,
-          color: '1E3A8A',
-          font: 'Arial',
-        }),
-      ],
-    })
-  )
-
-  docPayload.declarations.forEach((decl, idx) => {
-    bodyParagraphs.push(
-      new Paragraph({
-        spacing: { after: 100 },
-        children: [
-          new TextRun({ text: `${idx + 1}. `, bold: true, size: 18, color: '1E293B', font: 'Arial' }),
-          new TextRun({ text: decl, size: 18, color: '334155', font: 'Arial' }),
-        ],
-      })
-    )
-  })
 
   // Remarks if present
   if (docPayload.customNotes || emdData.remarks) {
@@ -944,36 +896,8 @@ export async function generateEmdPdf(
     ['Branch Name / Address', emdData.selfAccount.branch || 'Not Specified'],
   ])
 
-  // Check if we need page 2 for declarations and signature
-  if (cursorY > pageHeight - 48) {
-    doc.addPage()
-    cursorY = 25
-  }
-
-  // 4. Declarations
-  doc.setFont('helvetica', 'bold')
-  doc.setFontSize(8.5)
-  doc.setTextColor(30, 58, 138)
-  doc.text('4. BIDDER UNDERTAKINGS & COMPLIANCE DECLARATIONS', leftMargin, cursorY)
-  cursorY += 4.5
-
-  doc.setFont('helvetica', 'normal')
-  doc.setFontSize(7.5)
-  doc.setTextColor(51, 65, 85)
-
-  docPayload.declarations.forEach((decl, idx) => {
-    const textLines = doc.splitTextToSize(`${idx + 1}.  ${decl}`, contentWidth)
-    doc.text(textLines, leftMargin, cursorY)
-    cursorY += textLines.length * 3.6 + 1.5
-  })
-
   // Signatory Block
-  if (cursorY > pageHeight - 38) {
-    doc.addPage()
-    cursorY = 25
-  } else {
-    cursorY += 4
-  }
+  cursorY += 6
 
   doc.setFont('helvetica', 'normal')
   doc.setFontSize(8)

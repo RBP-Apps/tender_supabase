@@ -15,7 +15,7 @@ function BankGuaranteeSection({ doc, pkg }: { doc: DocData; pkg: ResolvedPackage
         <p>Date: {doc.signDate}</p>
       </div>
       <p className="mb-4 text-justify">
-        In consideration of M/s {COMPANY.name} (formerly {COMPANY.formerName}), having its Registered Office at{' '}
+        In consideration of M/s {COMPANY.name}{COMPANY.formerName ? ` (formerly ${COMPANY.formerName})` : ''}, having its Registered Office at{' '}
         {COMPANY.address} (the “Bidder”), submitting its Bid inter alia for Response to RfS No. {doc.rfs}
         {doc.corrigendum ? ` (read with ${doc.corrigendum})` : ''} for “{doc.workName}”, against Package {pkg.code} (
         {pkg.region}), issued by {doc.authorityFullName.toUpperCase()} (“{doc.authority}”), the ______________________

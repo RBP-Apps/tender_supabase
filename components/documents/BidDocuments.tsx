@@ -36,7 +36,7 @@ export function BidDocuments({ doc }: { doc: DocData }) {
 
         <p className="mb-4">Dear Sir,</p>
         <p className="mb-4 text-justify">
-          We, {COMPANY.name} (formerly {COMPANY.formerName}), having read, examined and understood the Request for
+          We, {COMPANY.name}{COMPANY.formerName ? ` (formerly ${COMPANY.formerName})` : ''}, having read, examined and understood the Request for
           Selection{doc.corrigendum ? ` read with ${doc.corrigendum}` : ''}, hereby submit our bid, as an
           individual bidder (single entity), against Packages {doc.packagesLabel}, comprising the Techno-Commercial Bid
           and the Price Bid. We confirm that neither we nor any of our Parent Company / Affiliate has submitted any other
@@ -88,17 +88,17 @@ export function BidDocuments({ doc }: { doc: DocData }) {
         <table className={TABLE}>
           <tbody>
             {[
-              { label: 'Name of the Bidder', value: `${COMPANY.name} (formerly ${COMPANY.formerName})` },
+              { label: 'Name of the Bidder', value: `${COMPANY.name}${COMPANY.formerName ? ` (formerly ${COMPANY.formerName})` : ''}` },
               { label: 'Registered Office Address', value: COMPANY.address },
               { label: 'Contact No. / E-mail / Website', value: `${COMPANY.phone} / ${COMPANY.email} / ${COMPANY.website}` },
               { label: 'Authorized Contact Person', value: `${COMPANY.signatory}, ${COMPANY.signatoryDesignation}` },
-              { label: 'Year of Incorporation', value: COMPANY.yearOfIncorporation },
-              { label: 'CIN', value: COMPANY.cin },
+              { label: 'Year of Incorporation', value: COMPANY.yearOfIncorporation || '______________' },
+              { label: 'CIN', value: COMPANY.cin || '______________' },
               { label: 'Ever debarred by any Govt. Dept./Undertaking', value: 'No' },
               { label: 'Whether wishes to form a Project Company', value: 'No – bidding as an individual entity' },
               { label: 'Bidding company listed in India', value: 'No' },
-              { label: 'GST No.', value: COMPANY.gst },
-              { label: 'PAN No.', value: COMPANY.pan },
+              { label: 'GST No.', value: COMPANY.gst || '______________' },
+              { label: 'PAN No.', value: COMPANY.pan || '______________' },
               { label: 'Certificate of Incorporation / name-change enclosed', value: 'Yes' },
               { label: 'MoA/AoA, GST & PAN enclosed', value: 'Yes' },
             ].map((row, i) => (
@@ -117,7 +117,7 @@ export function BidDocuments({ doc }: { doc: DocData }) {
         <FormatTag>FORMAT-6</FormatTag>
         <DocTitle>FINANCIAL ELIGIBILITY CRITERIA REQUIREMENT</DocTitle>
         <p className="font-bold mb-4">
-          Name of Financially Evaluated Entity: {COMPANY.name} (formerly {COMPANY.formerName})
+          Name of Financially Evaluated Entity: {COMPANY.name}{COMPANY.formerName ? ` (formerly ${COMPANY.formerName})` : ''}
         </p>
         <table className={`${TABLE} text-center`}>
           <thead>
@@ -146,7 +146,7 @@ export function BidDocuments({ doc }: { doc: DocData }) {
             ? `, against the cumulative requirement of Rs. ${doc.financialRequirementCr} Crore for ${packagesBid(doc)}`
             : ''}
           . Net Worth is positive and increasing for all years shown. Figures are per audited financial statements
-          (audited in the erstwhile name &apos;{COMPANY.formerName}&apos;; name-change certificate enclosed).
+          {COMPANY.formerName ? `(audited in the erstwhile name '${COMPANY.formerName}'; name-change certificate enclosed).` : ''}
         </p>
         <div className="mb-8">
           <p className="font-bold mb-8">For {COMPANY.name}</p>

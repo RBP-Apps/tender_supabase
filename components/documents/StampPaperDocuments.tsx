@@ -12,7 +12,7 @@ export function StampPaperDocuments({ doc }: { doc: DocData }) {
         <DocTitle>POWER OF ATTORNEY</DocTitle>
         <StampNote notarised />
         <p className="mb-4 text-justify">
-          Know all men by these presents, We, {COMPANY.name} (formerly {COMPANY.formerName}), having our Registered
+          Know all men by these presents, We, {COMPANY.name}{COMPANY.formerName ? ` (formerly ${COMPANY.formerName})` : ''}, having our Registered
           Office at {COMPANY.address}, do hereby constitute, appoint and authorize {COMPANY.signatory},{' '}
           {COMPANY.signatoryDesignation}, as our true and lawful attorney, to do in our name and on our behalf all acts,
           deeds and things necessary in connection with or incidental to the submission of our bid for {doc.workName},

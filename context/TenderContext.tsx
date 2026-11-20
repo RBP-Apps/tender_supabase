@@ -38,6 +38,7 @@ import {
   setCachedMasters,
   ALL_PAGE_PATHS,
 } from '@/lib/user-service'
+import { applyCompanyMaster } from '@/lib/company'
 import { hashPassword, verifyPassword, encodeStoredPassword } from '@/lib/auth-crypto'
 
 interface TenderContextType {
@@ -147,6 +148,9 @@ export function TenderProvider({ children }: { children: React.ReactNode }) {
     setSupabaseConnected(health.connected)
     return health
   }, [])
+
+  // Keep PAN / GST on every generated document in sync with the Master table
+  applyCompanyMaster(companyDocs)
 
   // 1. Instant client hydration on mount: restore session user & cached data immediately (0ms delay on refresh)
   useEffect(() => {
@@ -683,6 +687,8 @@ export function TenderProvider({ children }: { children: React.ReactNode }) {
       signatureDoc: 'Authorised Signatory / Signature',
       sealDoc: 'Company Seal / Stamp',
       signatureSealDoc: 'Signature and Seal',
+      panDoc: 'PAN Card',
+      gstDoc: 'GST Certificate',
     }
     notify(doc ? `${titleMap[key]} saved in vault` : `${titleMap[key]} removed`)
 

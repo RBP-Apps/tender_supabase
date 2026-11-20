@@ -329,51 +329,8 @@ export function collectAllTenderDocuments(tender: Tender): DocumentDossierSummar
     }
   }
 
-  // 6. SYSTEM-GENERATED BID SUBMISSION DOCUMENTS
-  const standardGeneratedDocs = [
-    {
-      id: 'gen-checklist',
-      title: 'Bid Submission Checklist & Index',
-      fileName: `Checklist_${tender.id}.pdf`,
-    },
-    {
-      id: 'gen-bid-formats',
-      title: 'Company Letterhead Bid Formats (1, 2, 6, 7, 9, 10, 12)',
-      fileName: `Bid_Formats_${tender.id}.pdf`,
-    },
-    {
-      id: 'gen-emd-bg',
-      title: 'EMD Bank Guarantee Annexure-K',
-      fileName: `Annexure_K_EMD_${tender.id}.pdf`,
-    },
-    {
-      id: 'gen-stamp-paper',
-      title: 'Stamp Paper Affidavits (Format-5, Annexures D, H, E)',
-      fileName: `Stamp_Affidavits_${tender.id}.pdf`,
-    },
-    {
-      id: 'gen-envelope-stickers',
-      title: 'Envelope Covers & Master Submission Stickers',
-      fileName: `Envelope_Stickers_${tender.id}.pdf`,
-    },
-  ]
-
-  standardGeneratedDocs.forEach(g => {
-    docs.push({
-      id: `${g.id}-${tender.id}`,
-      title: g.title,
-      category: 'generated-bid',
-      categoryLabel: 'Auto-Generated Submission Documents',
-      stageOrigin: 'System Generator',
-      fileName: g.fileName,
-      fileType: 'application/pdf',
-      fileTypeGroup: 'pdf',
-      uploadedAt: new Date().toISOString(),
-      source: 'system-generated',
-      sourceLabel: 'Standard Bid Template',
-      referenceNote: 'Auto-compiled with tender parameters and company letterhead',
-    })
-  })
+  // (No hard-coded 'generated' documents: only files that really exist, or that come from this
+  //  tender's own checklist, are listed. Missing ones show as 'Pending Upload'.)
 
   // 6b. ADDITIONAL / CUSTOM UPLOADED DOCUMENTS IN DOCUMENT READY
   if (tender.documentReady?.customDocs && tender.documentReady.customDocs.length > 0) {
@@ -625,39 +582,6 @@ export function collectAllTenderDocuments(tender: Tender): DocumentDossierSummar
           sourceLabel: 'Stage 04 Sample Datasheet / Receipt',
           letterContent: tender.sampleDetails.productSample.letterContent,
         }
-      }
-    } else if (
-      chk.matchedFieldKey === 'bidAnnexures' ||
-      chkKey.includes('format-') ||
-      chkKey.includes('annexure') ||
-      chkKey.includes('affidavit') ||
-      chkKey.includes('undertaking') ||
-      chkKey.includes('power of attorney') ||
-      chkKey.includes('letter of bid')
-    ) {
-      matchedFile = {
-        name: `Annexure_${tender.id}_${slNo}.pdf`,
-        type: 'application/pdf',
-        source: 'system-generated',
-        sourceLabel: 'Standard Bid Template',
-        remarks: 'Auto-compiled with tender parameters & letterhead',
-      }
-    }
-
-    // Fallback: If not matched to an existing uploaded file from earlier stages,
-    // generate an authentic compliance document record so that all checklist points are ready.
-    if (!matchedFile) {
-      const safeDocName = chk.docName
-        .replace(/^\d+[\.\)]\s*/, '')
-        .replace(/[^a-zA-Z0-9_\-]/g, '_')
-        .slice(0, 35)
-      matchedFile = {
-        name: `${safeDocName}_${tender.id || 'Doc'}.pdf`,
-        size: 156000,
-        type: 'application/pdf',
-        source: 'system-generated',
-        sourceLabel: chk.isMandatory !== false ? 'Standard Dossier Template' : 'Conditional Template',
-        remarks: chk.applicableDetails || chk.requirement || 'Generated compliance document ready for submission',
       }
     }
 
