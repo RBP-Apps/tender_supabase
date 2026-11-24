@@ -326,7 +326,8 @@ ABSOLUTE RULES:
    - "Partially Eligible": some mandatory requirements satisfied, others missing documents.
    - "Insufficient Information": the tender requirements could not be read, or key bidder documents are unreadable / ambiguous.
 6. If two tender clauses give different values (e.g. original vs corrigendum), report both with pages and do not choose one unless the tender states precedence.
-7. A requirement spread over several pages (e.g. a table continued on the next page) must include rows from ALL those pages.`
+7. A requirement spread over several pages (e.g. a table continued on the next page) must include rows from ALL those pages.
+8. DOCUMENT CLAUSES ARE SEPARATE CRITERIA. Whenever the passages say the bidder must submit / attach / upload a document (e.g. BIS licence, test reports, MAF / manufacturer authorisation, registration, GST/PAN, affidavit, undertaking, ISO, experience or financial certificates), create ONE criteria row per such document (criteriaName = the document, tenderSourceQuote = the clause line, isMandatory = true when the tender says must/shall/mandatory/compulsory). Do not merge them into the turnover or experience rows and do not skip them. Judge each against the bidder documents (requirement-satisfied only with a verified bidder quote; document-not-uploaded if no matching bidder document).`
 
     const userText = `TENDER DOCUMENT STATUS: ${tenderDocStatus}
 
