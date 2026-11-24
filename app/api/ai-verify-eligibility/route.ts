@@ -418,7 +418,7 @@ Produce the structured eligibility evaluation. List EVERY individual eligibility
     // dropped by the model. If no row covers it, add one built from the tender page + bidder text.
     if (tenderTextAvailable) {
       for (const rule of DOC_CLAUSE_RULES) {
-        const coveredRows = breakdown.filter((r: any) => rule.tender.test(`${r.criteriaName || ''} ${r.tenderRequirement || ''}`))
+        const coveredRows = breakdown.filter((r: any) => rule.tender.test(String(r.criteriaName || '')))
         if (coveredRows.length) {
           // A "Pass" for a single-document row must be backed by text of the cited file that really shows that document.
           for (const r of coveredRows as any[]) {
@@ -440,6 +440,7 @@ Produce the structured eligibility evaluation. List EVERY individual eligibility
           const hit0 = bidderChunks.find(c => rule.bidder.test(c.content))
           for (const r of coveredRows as any[]) {
             if (!hit0 || r.evidenceSituation !== 'document-not-uploaded') continue
+            if (DOC_CLAUSE_RULES.filter(x => x.tender.test(String(r.criteriaName || ''))).length !== 1) continue
             const t0 = hit0.content.replace(/\s+/g, ' ')
             const at0 = t0.match(rule.bidder)?.index ?? 0
             const q0 = t0.slice(Math.max(0, at0 - 40), at0 + 160).trim()
