@@ -129,3 +129,46 @@ export function mapSectionChunks(
   for (const s of sections) map.sections[s].pages.slice(0, limit).forEach(p => wanted.add(p))
   return tenderChunks.filter(c => wanted.has(c.pageNumber as number))
 }
+
+const DOC_TERMS =
+  /\b(BIS|CRS|ISI|MAF|manufacturer(?:'s|’s)?\s+authori[sz]ation|authori[sz]ation\s+(?:letter|form)|OEM\s+authori[sz]ation|test\s+reports?|NABL|licen[cs]e|registration\s+certificate|GST|PAN|affidavit|undertaking|ISO\s*\d*|ALMM|datasheet|catalogue)\b/i
+const DOC_VERBS = /\b(submit|submitted|enclose[d]?|attach(?:ed)?|upload(?:ed)?|furnish|produce|copy\s+of|certified\s+copy|should\s+have|shall\s+have|must\s+have|mandatory|required|compulsory|valid)\b/i
+
+/**
+ * Compact extracts of every sentence-sized window where the tender asks the bidder for a
+ * named document (BIS, MAF, test reports, licences, GST/PAN, affidavits ...), taken from the
+ * tender-map's document-clause pages. Always small enough to ride along with any prompt, so
+ * a document clause can never be pushed out by page-size budgets.
+ */
+export function documentClauseExtracts(
+  chunks: DocumentPageChunk[],
+  docs: Array<Pick<IndexedDocument, 'docName' | 'role'>>,
+  maxChars = 7000
+): string {
+  const pages = mapSectionChunks(chunks, ['documentClauses'], docs, 12)
+  const out: string[] = []
+  let used = 0
+  for (const c of pages) {
+    const text = c.content.replace(/\s+/g, ' ')
+    const seen: Array<[number, number]> = []
+    const re = new RegExp(DOC_TERMS.source, 'gi')
+    let m: RegExpExecArray | null
+    const windows: string[] = []
+    while ((m = re.exec(text))) {
+      const s = Math.max(0, m.index - 220)
+      const e = Math.min(text.length, m.index + 320)
+      if (seen.some(([a, b]) => s < b && e > a)) continue
+      const w = text.slice(s, e)
+      if (!DOC_VERBS.test(w)) continue
+      seen.push([s, e])
+      windows.push(w)
+      if (windows.length >= 3) break
+    }
+    if (!windows.length) continue
+    const block = `=== [DOCUMENT: "${c.docName}" | PAGE: ${c.pageNumber}] (document clause) ===\n${windows.map(w => `…${w}…`).join('\n')}`
+    if (used + block.length > maxChars) break
+    out.push(block)
+    used += block.length
+  }
+  return out.join('\n\n')
+}

@@ -5,7 +5,7 @@
 // Deterministic (no model call): fast, free and every entry points to a real page.
 import type { PageText } from '@/lib/tender-validation-agent'
 
-export type SectionKey = 'eligibility' | 'emdFee' | 'checklist' | 'sampleTest' | 'technicalSpec' | 'datesSubmission' | 'paymentTerms'
+export type SectionKey = 'eligibility' | 'emdFee' | 'checklist' | 'sampleTest' | 'technicalSpec' | 'datesSubmission' | 'paymentTerms' | 'documentClauses'
 
 export interface AnnexureEntry {
   label: string // e.g. "Annexure-03"
@@ -30,6 +30,7 @@ const SECTION_KEYWORDS: Record<SectionKey, string[]> = {
   sampleTest: ['test report', 'type test', 'nabl', 'sample', 'bis', 'iso', 'manufacturer authori', 'maf', 'oem'],
   technicalSpec: ['technical specification', 'specification of', 'as per is', 'iec', 'make', 'gauge', 'mm', 'rating'],
   datesSubmission: ['last date', 'due date', 'pre-bid', 'opening of', 'submission of bid', 'validity of bid'],
+  documentClauses: ['bis licen', 'valid bis', 'test report', 'manufacturer authori', 'maf', 'authori', 'copy of', 'certified copy', 'gst', 'pan card', 'affidavit', 'undertaking', 'shall submit', 'to be submitted', 'must submit', 'enclose', 'attached', 'nabl', 'almm', 'licence', 'license'],
   paymentTerms: ['payment terms', 'payment shall', 'advance', 'security deposit', 'performance guarantee', 'liquidated damage', 'warranty'],
 }
 
@@ -55,7 +56,7 @@ export function buildTenderMap(pages: PageText[]): TenderMap {
       })
       .filter(s => s.hits >= 3)
       .sort((a, b) => b.hits - a.hits)
-      .slice(0, 8)
+      .slice(0, key === 'documentClauses' ? 14 : 8)
     sections[key] = { pages: scored.map(s => s.page).sort((a, b) => a - b), hits: scored.reduce((n, s) => n + s.hits, 0) }
   }
 

@@ -3,7 +3,7 @@ import { createOpenAI } from '@ai-sdk/openai'
 import { generateObject } from 'ai'
 import { z } from 'zod'
 import { DocumentPageChunk } from '@/types/document-understanding'
-import { loadTenderEvidence, hybridRetrieve, mapSectionChunks } from '@/lib/tender-evidence'
+import { loadTenderEvidence, hybridRetrieve, mapSectionChunks, documentClauseExtracts } from '@/lib/tender-evidence'
 import { ensureDocumentIndexed, pagesToChunks } from '@/lib/document-index-store'
 import { retrieveContextForQuery } from '@/lib/document-retrieval-engine'
 import { normQuote, quoteOnPage } from '@/lib/document-verifier'
@@ -202,6 +202,11 @@ export async function POST(request: Request) {
         budget -= c.charCount
       }
       tenderClausesContext = pagesText(kept)
+      const clauseExtracts = documentClauseExtracts(tenderChunks, evidence.docs)
+      if (clauseExtracts) tenderClausesContext += `
+
+[DOCUMENT CLAUSES – where the tender asks the bidder for a named document; each is a separate criterion]
+${clauseExtracts}`
     }
 
     // ── 2. BIDDER documents (indexed under this tender, role "bidder": OCR + Vision for scans) ──
