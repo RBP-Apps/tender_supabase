@@ -3,7 +3,7 @@ import { createOpenAI } from '@ai-sdk/openai'
 import { generateObject } from 'ai'
 import { z } from 'zod'
 import { DocumentPageChunk } from '@/types/document-understanding'
-import { loadTenderEvidence, hybridRetrieve, mapSectionChunks, documentClauseExtracts } from '@/lib/tender-evidence'
+import { loadTenderEvidence, hybridRetrieve, mapSectionChunks, documentClauseExtracts, DOC_CLAUSE_RULES, findDocumentDemand } from '@/lib/tender-evidence'
 import { ensureDocumentIndexed, pagesToChunks } from '@/lib/document-index-store'
 import { retrieveContextForQuery } from '@/lib/document-retrieval-engine'
 import { normQuote, quoteOnPage } from '@/lib/document-verifier'
@@ -413,6 +413,42 @@ Produce the structured eligibility evaluation. List EVERY individual eligibility
       }
       return r
     })
+
+    // Deterministic safety net: a document the tender demands (BIS, MAF, test reports) can never be
+    // dropped by the model. If no row covers it, add one built from the tender page + bidder text.
+    if (tenderTextAvailable) {
+      for (const rule of DOC_CLAUSE_RULES) {
+        const covered = breakdown.some((r: any) => rule.tender.test(`${r.criteriaName || ''} ${r.tenderRequirement || ''}`))
+        if (covered) continue
+        const demand = findDocumentDemand(readableTender, evidence.docs, rule)
+        if (!demand) continue
+        const hit = bidderChunks.find(c => rule.bidder.test(c.content))
+        let bidderQuote = ''
+        if (hit) {
+          const t = hit.content.replace(/\s+/g, ' ')
+          const mm = t.match(rule.bidder)
+          const at = mm?.index ?? 0
+          bidderQuote = t.slice(Math.max(0, at - 40), at + 160).trim()
+        }
+        const bidderOk = !!bidderQuote && bidderChunks.some(c => quoteOnPage(bidderQuote, c.content))
+        breakdown.push({
+          criteriaName: rule.name,
+          status: bidderOk ? 'Pass' : demand.mandatory ? 'Fail' : 'Pending',
+          tenderRequirement: demand.quote,
+          tenderSourceDocument: demand.docName,
+          tenderSourcePage: String(demand.page),
+          tenderSourceQuote: demand.quote,
+          userSubmitted: bidderOk ? `${hit!.docName}, Page ${hit!.pageNumber}` : 'Not uploaded',
+          bidderSourceQuote: bidderQuote,
+          comparisonResult: bidderOk ? `${rule.name} found in the uploaded document.` : `No uploaded document contains a ${rule.name}.`,
+          evidenceSituation: bidderOk ? 'requirement-satisfied' : 'document-not-uploaded',
+          rejectionReason: bidderOk ? null : `${rule.name} demanded by the tender but not uploaded`,
+          isMandatory: demand.mandatory,
+          tenderQuoteVerified: true,
+          bidderQuoteVerified: bidderOk,
+        })
+      }
+    }
 
     const unverifiedQuotes = breakdown.filter((r: any) => r.tenderSourceQuote && !r.tenderQuoteVerified).length
     if (unverifiedQuotes > 0) {

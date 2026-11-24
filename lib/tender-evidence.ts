@@ -172,3 +172,42 @@ export function documentClauseExtracts(
   }
   return out.join('\n\n')
 }
+
+export interface DocClauseRule {
+  key: string
+  name: string
+  tender: RegExp
+  bidder: RegExp
+}
+
+/** Documents whose submission clause must never be missing from an eligibility check. */
+export const DOC_CLAUSE_RULES: DocClauseRule[] = [
+  { key: 'bis', name: 'BIS Certificate / Licence', tender: /\bBIS\b.{0,40}(licen[cs]e|certificate|registration)|(licen[cs]e|certificate|registration).{0,40}\bBIS\b/i, bidder: /\bBIS\b|bureau\s+of\s+indian\s+standards|licen[cs]e\s+no|\bR-\d{6,9}\b/i },
+  { key: 'maf', name: 'Manufacturer Authorization Form (MAF)', tender: /\bMAF\b|manufacturer(?:'s|’s)?\s+authori[sz]ation/i, bidder: /manufacturer.{0,60}authori[sz]|\bMAF\b|authori[sz]ation\s+(letter|form)|hereby\s+authori[sz]e/i },
+  { key: 'testreport', name: 'Test Reports', tender: /test\s+reports?/i, bidder: /test\s+report|\bSTC\b|\bNABL\b|IEC\s*61215|IEC\s*61730/i },
+]
+
+const DEMAND = /\b(submit|submitted|enclose[d]?|attach(?:ed)?|upload(?:ed)?|furnish|copy\s+of|certified\s+copy|shall|must|mandatory|compulsory|required)\b/i
+const MUST = /\b(shall|must|mandatory|compulsory|required)\b/i
+
+/** Deterministically find where the tender demands one of the rule documents (first page that does). */
+export function findDocumentDemand(
+  chunks: DocumentPageChunk[],
+  docs: Array<Pick<IndexedDocument, 'docName' | 'role'>>,
+  rule: DocClauseRule
+): { docName: string; page: number; quote: string; mandatory: boolean } | null {
+  const pages = chunks
+    .filter(c => c.pageNumber && !c.content.startsWith('[EXTRACTION FAILED') && docs.some(d => d.role === 'tender' && d.docName === c.docName))
+    .sort((a, b) => (a.pageNumber as number) - (b.pageNumber as number))
+  for (const c of pages) {
+    const text = c.content.replace(/\s+/g, ' ')
+    const re = new RegExp(rule.tender.source, 'gi')
+    let m: RegExpExecArray | null
+    while ((m = re.exec(text))) {
+      const w = text.slice(Math.max(0, m.index - 110), Math.min(text.length, m.index + 200))
+      if (!DEMAND.test(w)) continue
+      return { docName: c.docName, page: c.pageNumber as number, quote: w.trim(), mandatory: MUST.test(w) }
+    }
+  }
+  return null
+}
