@@ -6,6 +6,7 @@ import { ensureDocumentIndexed, IndexedDocument, pagesToChunks, semanticScores }
 import { retrieveContextForQuery, RetrievalResult } from '@/lib/document-retrieval-engine'
 import { UsageTracker } from '@/lib/ai-usage'
 import { DocumentPageChunk } from '@/types/document-understanding'
+import { buildTenderMap, type SectionKey } from '@/lib/tender-map'
 
 export interface TenderEvidence {
   docs: IndexedDocument[]
@@ -109,4 +110,22 @@ export async function hybridRetrieve(params: {
   }
   const r = retrieveContextForQuery(params.query, params.chunks, params.maxTokens ?? 25000, { semanticScores: sem })
   return { ...r, semanticUsed: !!sem && sem.size > 0 }
+}
+
+/**
+ * Tender-map pages for a section, as evidence chunks. Built from this tender's OWN
+ * document chunks only (corrigenda excluded), so every returned page is real tender text.
+ */
+export function mapSectionChunks(
+  chunks: DocumentPageChunk[],
+  sections: SectionKey[],
+  docs: Array<Pick<IndexedDocument, 'docName' | 'role'>>,
+  limit = 8
+): DocumentPageChunk[] {
+  const tenderChunks = chunks.filter(c => c.pageNumber && !c.content.startsWith('[EXTRACTION FAILED') && docs.some(d => d.role === 'tender' && d.docName === c.docName))
+  if (!tenderChunks.length) return []
+  const map = buildTenderMap(tenderChunks.map(c => ({ page: c.pageNumber as number, text: c.content.replace(/\s+/g, ' ').trim() })))
+  const wanted = new Set<number>()
+  for (const s of sections) map.sections[s].pages.slice(0, limit).forEach(p => wanted.add(p))
+  return tenderChunks.filter(c => wanted.has(c.pageNumber as number))
 }

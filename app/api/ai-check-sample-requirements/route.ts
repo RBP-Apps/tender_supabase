@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { createOpenAI } from '@ai-sdk/openai'
 import { generateText, Output } from 'ai'
 import { z } from 'zod'
-import { loadTenderEvidence, hybridRetrieve } from '@/lib/tender-evidence'
+import { loadTenderEvidence, hybridRetrieve, mapSectionChunks } from '@/lib/tender-evidence'
 import { quoteOnPage } from '@/lib/document-verifier'
 import { UsageTracker } from '@/lib/ai-usage'
 import { DocumentPageChunk } from '@/types/document-understanding'
@@ -146,6 +146,12 @@ export async function POST(request: Request) {
     bisSnippets = await facet('BIS certificate bureau of indian standards CRS registration ISI licence')
     sampleSnippets = await facet('sample submission inspection of samples physical sample prototype')
     generalTechSnippets = await facet('documents to be submitted checklist envelope technical bid mandatory documents annexure', 9000)
+    // Tender map: checklist + sample/test pages from the whole-tender pass, always included
+    const mapBlock = block(mapSectionChunks(evidenceChunks, ['checklist', 'sampleTest'], evidence.docs, 6).map(c => ({ ...c, content: c.content.slice(0, 3500) })))
+    if (mapBlock) generalTechSnippets = `${generalTechSnippets}
+
+[Tender-map pages for checklist / sample / test]:
+${mapBlock}`
 
     // Direct clause fallback: ensure snippets are never empty when evidence chunks exist
     if (evidenceChunks.length > 0) {

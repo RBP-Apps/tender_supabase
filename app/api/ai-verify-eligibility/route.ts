@@ -3,7 +3,7 @@ import { createOpenAI } from '@ai-sdk/openai'
 import { generateObject } from 'ai'
 import { z } from 'zod'
 import { DocumentPageChunk } from '@/types/document-understanding'
-import { loadTenderEvidence, hybridRetrieve } from '@/lib/tender-evidence'
+import { loadTenderEvidence, hybridRetrieve, mapSectionChunks } from '@/lib/tender-evidence'
 import { ensureDocumentIndexed, pagesToChunks } from '@/lib/document-index-store'
 import { retrieveContextForQuery } from '@/lib/document-retrieval-engine'
 import { normQuote, quoteOnPage } from '@/lib/document-verifier'
@@ -175,6 +175,8 @@ export async function POST(request: Request) {
       for (const r of results) {
         for (const c of r.retrievedChunks) picked.set(c.id, c)
       }
+      // Tender map: the pages the whole-tender pass assigned to eligibility / documents checklist
+      for (const c of mapSectionChunks(tenderChunks, ['eligibility', 'checklist'], evidence.docs, 6)) picked.set(c.id, c)
       if (picked.size < 5 && tenderChunks.length > 0) {
         const fallbackPages = tenderChunks
           .filter(c => /turnover|experience|eligibility|annual|crore|bidder/i.test(c.content) || (c.pageNumber && c.pageNumber <= 15))

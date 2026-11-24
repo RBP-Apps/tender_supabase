@@ -13,6 +13,7 @@ import { z } from 'zod'
 import type { LanguageModel } from 'ai'
 import { loadPdfjsNative } from '@/lib/server-pdf'
 import { quoteOnPage } from '@/lib/document-verifier'
+import { buildTenderMap } from '@/lib/tender-map'
 import type { TenderExtraction } from '@/lib/tender-extraction-schema'
 
 export interface PageText {
@@ -182,6 +183,7 @@ export async function validateAndFillExtraction(opts: {
   const notes: string[] = []
   const reports: FieldReport[] = []
 
+  const tenderMap = buildTenderMap(readable)
   const before = emptyFieldKeys(x)
   const scanned = readable.length === 0
   const checkedSpecs = SCALAR_FIELDS
@@ -228,6 +230,12 @@ export async function validateAndFillExtraction(opts: {
       jobs.map(async job => {
         // keep page 1-2 (cover / NIT summary) as context for identity jobs
         let chosen = pickPages(readable, job.keywords, 6)
+        // Tender map pages for this job (EMD/fee/bank/dates/spec) join the keyword pages
+        const mapKeys = job.packages || job.bank ? (['emdFee'] as const) : job.components ? (['technicalSpec'] as const) : job.label === 'fee-dates' ? (['emdFee', 'datesSubmission'] as const) : []
+        if (mapKeys.length) {
+          const extra = new Set(mapKeys.flatMap(k => tenderMap.sections[k].pages.slice(0, 4)))
+          chosen = [...chosen, ...readable.filter(p => extra.has(p.page) && !chosen.includes(p))].sort((a, b) => a.page - b.page).slice(0, 9)
+        }
         if (job.label === 'identity' || job.label === 'fee-dates') {
           const head = readable.slice(0, 3)
           chosen = [...head, ...chosen.filter(c => !head.includes(c))]
