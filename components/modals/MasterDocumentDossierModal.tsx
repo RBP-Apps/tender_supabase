@@ -45,6 +45,7 @@ import { extractPortalChecklist, isOldFallbackChecklist } from '@/lib/portal-che
 import { resolveOrBuildDocForChecklistItem } from '@/components/modals/PortalUploadModal'
 import { dataUrlToBlobUrl } from '@/lib/utils'
 import { generatePdfDocument } from '@/lib/document-file-generator'
+import { COMPANY } from '@/lib/company'
 import { WordLetterEditorModal } from './WordLetterEditorModal'
 import { useTenders } from '@/context/TenderContext'
 import { AllDocumentsSummaryModal } from './AllDocumentsSummaryModal'
@@ -559,6 +560,56 @@ Upload the actual document in the earlier stage or in Document Ready.
     setWordEditorDoc(collected)
   }
 
+  // Build the document in the tender's own prescribed format on the RBP letterhead
+  const [generatingId, setGeneratingId] = useState<string | null>(null)
+  const handleGenerateFromTenderFormat = async (item: PortalChecklistItem, doc: PortalUploadDocumentItem) => {
+    setGeneratingId(item.id)
+    try {
+      const res = await fetch('/api/generate-tender-format', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          docName: item.docName,
+          clauseOrPageRef: item.clauseOrPageRef,
+          pdfDataUrl: tender.tenderDoc?.dataUrl,
+          customDocumentName: tender.tenderDoc?.name,
+          tenderTitle: tender.title,
+          tenderNumber: tender.bid?.rfsNo,
+          authority: tender.authority,
+          workName: tender.bid?.workName,
+          company: { pan: COMPANY.pan, gst: COMPANY.gst },
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok || data.error) throw new Error(data.error || 'Generation failed')
+      if (!data.formatFound) {
+        notify(data.reason || 'The tender has no prescribed format for this item. Upload the actual document.')
+        return
+      }
+      setWordEditorDoc({
+        id: doc.id,
+        title: data.title || item.docName,
+        category: 'portal-checklist',
+        categoryLabel: item.envelope || 'Tender Checklist Requirement',
+        stageOrigin: item.clauseOrPageRef || 'Stage 05 Document Ready',
+        fileName: `${(data.title || item.docName).replace(/[^a-zA-Z0-9_-]+/g, '_')}.docx`,
+        fileType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        fileTypeGroup: 'doc',
+        uploadedAt: new Date().toISOString(),
+        source: 'manual-upload',
+        sourceLabel: 'Generated from tender format (draft)',
+        referenceNote: `Tender format, page ${data.sourcePage ?? '-'}. ${data.note || ''}`,
+        letterContent: { title: data.title, contentHtml: data.html, updatedAt: new Date().toISOString() },
+        checklistItemId: item.id,
+      } as CollectedDocument)
+    } catch (err) {
+      console.error(err)
+      notify(`Could not generate from the tender format: ${err instanceof Error ? err.message : 'error'}`)
+    } finally {
+      setGeneratingId(null)
+    }
+  }
+
   // Save Word Editor changes
   const handleSaveWordDocument = (updatedDoc: {
     title: string
@@ -937,6 +988,19 @@ Upload the actual document in the earlier stage or in Document Ready.
                               <FileEdit className="w-3.5 h-3.5" />
                               <span>Edit Doc</span>
                             </button>
+
+                            {!isViewOnly && (
+                              <button
+                                type="button"
+                                disabled={generatingId === item.id}
+                                onClick={() => handleGenerateFromTenderFormat(item, matchedDoc)}
+                                className="inline-flex items-center gap-1 text-amber-800 hover:text-amber-900 bg-amber-50 hover:bg-amber-100 border border-amber-200 px-2.5 py-1 rounded-lg font-semibold transition-colors cursor-pointer text-[11px] disabled:opacity-60"
+                                title="Build this document in the tender's own format on RBP letterhead"
+                              >
+                                {generatingId === item.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileEdit className="w-3.5 h-3.5" />}
+                                <span>{generatingId === item.id ? 'Generating…' : 'Generate (Tender Format)'}</span>
+                              </button>
+                            )}
 
                             {/* Replace / Upload File */}
                             {!isViewOnly && (
