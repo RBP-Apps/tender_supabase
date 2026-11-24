@@ -418,8 +418,26 @@ Produce the structured eligibility evaluation. List EVERY individual eligibility
     // dropped by the model. If no row covers it, add one built from the tender page + bidder text.
     if (tenderTextAvailable) {
       for (const rule of DOC_CLAUSE_RULES) {
-        const covered = breakdown.some((r: any) => rule.tender.test(`${r.criteriaName || ''} ${r.tenderRequirement || ''}`))
-        if (covered) continue
+        const coveredRows = breakdown.filter((r: any) => rule.tender.test(`${r.criteriaName || ''} ${r.tenderRequirement || ''}`))
+        if (coveredRows.length) {
+          // The model said "not uploaded" although an uploaded file visibly contains this document -> correct it.
+          const hit0 = bidderChunks.find(c => rule.bidder.test(c.content))
+          for (const r of coveredRows as any[]) {
+            if (!hit0 || r.evidenceSituation !== 'document-not-uploaded') continue
+            const t0 = hit0.content.replace(/\s+/g, ' ')
+            const at0 = t0.match(rule.bidder)?.index ?? 0
+            const q0 = t0.slice(Math.max(0, at0 - 40), at0 + 160).trim()
+            if (!bidderChunks.some(c => quoteOnPage(q0, c.content))) continue
+            r.status = 'Pass'
+            r.evidenceSituation = 'requirement-satisfied'
+            r.userSubmitted = `${hit0.docName}, Page ${hit0.pageNumber}`
+            r.bidderSourceQuote = q0
+            r.bidderQuoteVerified = true
+            r.rejectionReason = null
+            r.comparisonResult = `${rule.name} found in the uploaded document (presence verified from its text; approval / validity still to be confirmed by a person).`
+          }
+          continue
+        }
         const demand = findDocumentDemand(readableTender, evidence.docs, rule)
         if (!demand) continue
         const hit = bidderChunks.find(c => rule.bidder.test(c.content))
