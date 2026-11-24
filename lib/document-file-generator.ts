@@ -614,26 +614,30 @@ export function generatePdfDocument(
   const escapedTitle = title.replace(/[()\\]/g, '')
   const dateStr = new Date().toLocaleDateString('en-IN')
 
-  let streamText = `BT\n/F1 16 Tf\n50 760 Td\n(${escapedTitle}) Tj\nET\n`
-  streamText += `BT\n/F1 9 Tf\n50 740 Td\n(Tender FMS Official Report - Generated: ${dateStr}) Tj\nET\n`
-  streamText += `BT\n/F1 10 Tf\n`
+  const esc = (t: string) => t.replace(/[()\\]/g, '')
+  // RBP letterhead: company name + rule on top, peach banner footer (same as the EMD document).
+  let streamText = `BT\n/F2 14 Tf\n1 0 0 1 50 800 Tm\n(RBP ENERGY INDIA PRIVATE LIMITED) Tj\nET\n`
+  streamText += `0 0 0 RG 1.5 w 50 792 m 545 792 l S\n`
+  streamText += `BT\n/F2 13 Tf\n1 0 0 1 50 765 Tm\n(${esc(escapedTitle)}) Tj\nET\n`
+  streamText += `BT\n/F1 8 Tf\n1 0 0 1 50 750 Tm\n(Generated: ${dateStr}) Tj\nET\n`
 
-  let y = 710
-  const pageLines: string[] = []
-
-  for (const line of lines.slice(0, 48)) {
-    // Word wrap long lines
-    const maxChars = 75
+  let y = 725
+  const bodyOps: string[] = []
+  outer: for (const line of lines.slice(0, 80)) {
+    const maxChars = 90
     for (let c = 0; c < line.length; c += maxChars) {
-      const chunk = line.substring(c, c + maxChars).replace(/[()\\]/g, '')
-      pageLines.push(`50 ${y} Td\n(${chunk}) Tj\n-50 -14 Td\n`)
+      if (y < 80) break outer
+      const chunk = esc(line.substring(c, c + maxChars))
+      bodyOps.push(`BT\n/F1 10 Tf\n1 0 0 1 50 ${y} Tm\n(${chunk}) Tj\nET\n`)
       y -= 14
-      if (y < 60) break
     }
-    if (y < 60) break
   }
+  streamText += bodyOps.join('')
 
-  streamText += pageLines.join('') + 'ET\n'
+  // Footer banner
+  streamText += `0.988 0.831 0.592 rg 0 0 595 52 re f\n0 g\n`
+  streamText += `BT\n/F1 8 Tf\n1 0 0 1 50 34 Tm\n(Regd. Office: 303 Guru Ghasidas Plaza, Amapara, G.E Road, Raipur - 492 001) Tj\nET\n`
+  streamText += `BT\n/F1 8 Tf\n1 0 0 1 50 22 Tm\n(e: info@rbpindia.com  |  w: rbpindia.com  |  Sales: 92000 12500  |  Service: 92000 12400) Tj\nET\n`
 
   const streamLength = streamText.length
 
@@ -645,7 +649,7 @@ endobj
 << /Type /Pages /Kids [3 0 R] /Count 1 >>
 endobj
 3 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>
 endobj
 4 0 obj
 << /Length ${streamLength} >>
@@ -656,16 +660,20 @@ endobj
 5 0 obj
 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
 endobj
+6 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>
+endobj
 xref
-0 6
+0 7
 0000000000 65535 f 
 0000000009 00000 n 
 0000000058 00000 n 
 0000000115 00000 n 
 0000000244 00000 n 
 0000000000 00000 n 
+0000000000 00000 n 
 trailer
-<< /Size 6 /Root 1 0 R >>
+<< /Size 7 /Root 1 0 R >>
 startxref
 ${300 + streamLength}
 %%EOF`

@@ -91,6 +91,18 @@ export function numberToIndianWords(numStr: string | number): string {
   return `Rupees ${words.trim()} Only`
 }
 
+/** "Rs. 5,11,800 /- (Rs. 5,00,000 + Rs. 11,800)" – the single-payment line of the tender's EMD format. */
+export function emdAmountLine(tender: Tender, amount: string): string {
+  const total = Number(amount)
+  if (!amount || isNaN(total)) return amount || ''
+  const emdRs = Math.round((tender.bid?.packages || []).reduce((n, p) => n + (parseFloat(p.emdLakh) || 0), 0) * 100000)
+  const feeM = (tender.bid?.tenderFeePlusGst || '').replace(/,/g, '').match(/\d+(?:\.\d+)?/)
+  const feeRs = feeM ? Math.round(parseFloat(feeM[0])) : 0
+  const inr = (n: number) => n.toLocaleString('en-IN')
+  const split = emdRs > 0 && feeRs > 0 && total === emdRs + feeRs ? ` (Rs. ${inr(emdRs)} + Rs. ${inr(feeRs)})` : ''
+  return `Rs. ${inr(total)} /-${split}`
+}
+
 export interface EmdFormatAnalysis {
   formatTitle: string
   formatType: 'rtgs_neft' | 'bank_guarantee' | 'demand_draft' | 'portal_challan' | 'custom_undertaking'
@@ -531,16 +543,14 @@ export async function generateEmdDocx(
     })
   }
 
-  // SECTION 1: TRANSACTION PARTICULARS TABLE
+  // Tender-prescribed format: "Details of EMD and Tender Document Fee"
   bodyParagraphs.push(
     new Paragraph({
-      spacing: { before: 120, after: 80 },
+      spacing: { before: 120, after: 100 },
       children: [
         new TextRun({
-          text: '1. EMD PAYMENT & TRANSACTION PARTICULARS',
-          bold: true,
-          size: 19,
-          color: '1E3A8A',
+          text: 'A scanned copy of the EMD and Bid Document fee transaction is to be uploaded in the format below.',
+          size: 18,
           font: 'Arial',
         }),
       ],
@@ -549,65 +559,41 @@ export async function generateEmdDocx(
       width: { size: 100, type: WidthType.PERCENTAGE },
       borders: standardCellBorder,
       rows: [
-        createTableRow('Total EMD Amount Remitted', `₹ ${!isNaN(Number(emdData.amount)) ? Number(emdData.amount).toLocaleString('en-IN') : emdData.amount} (${docPayload.amountInWords || numberToIndianWords(emdData.amount)})`),
-        createTableRow('UTR / Bank Transaction Ref No.', emdData.utrNumber || 'Not Specified'),
-        createTableRow('Remittance / Payment Date', emdData.date || new Date().toISOString().slice(0, 10)),
-        createTableRow('Payment Mode', 'Online Electronic Fund Transfer (RTGS / NEFT)'),
-        createTableRow('Transaction Verification Status', 'Confirmed & Debited from Bidder Account'),
-      ],
-    })
-  )
-
-  // SECTION 2: DEPARTMENT BENEFICIARY DETAILS TABLE
-  bodyParagraphs.push(
-    new Paragraph({
-      spacing: { before: 200, after: 80 },
-      children: [
-        new TextRun({
-          text: '2. DEPARTMENT BENEFICIARY ACCOUNT DETAILS (AS PER TENDER NIT)',
-          bold: true,
-          size: 19,
-          color: '1E3A8A',
-          font: 'Arial',
-        }),
+        createTableRow('Tender No. and Date', `${docPayload.tenderRefNo}${tender.bid?.rfsDate ? ` dated ${tender.bid.rfsDate}` : ''}`),
+        createTableRow('Name of the Bidder', RBP_COMPANY.name),
+        createTableRow("Bidder's Bank Account Details", ''),
+        createTableRow('(i) Name of the bank', emdData.selfAccount.bankName),
+        createTableRow('(ii) Branch', emdData.selfAccount.branch || ''),
+        createTableRow('(iii) IFS Code', emdData.selfAccount.ifsc),
+        createTableRow('(iv) Account No.', emdData.selfAccount.accountNo),
+        createTableRow('(v) Transaction reference number', emdData.utrNumber || ''),
+        createTableRow('(vi) Date of transaction', emdData.date || ''),
+        createTableRow('(vii) EMD + Bid Document Fee', emdAmountLine(tender, emdData.amount)),
       ],
     }),
-    new Table({
-      width: { size: 100, type: WidthType.PERCENTAGE },
-      borders: standardCellBorder,
-      rows: [
-        createTableRow('Beneficiary / Account Holder Name', emdData.departmentAccount.accountHolder || 'Designated Tender Authority'),
-        createTableRow('Department Bank Name', emdData.departmentAccount.bankName || 'Not Specified'),
-        createTableRow('Account Number', emdData.departmentAccount.accountNo || 'Not Specified'),
-        createTableRow('IFSC Code', emdData.departmentAccount.ifsc || 'Not Specified'),
-        createTableRow('Branch Name / Address', emdData.departmentAccount.branch || 'Not Specified'),
-      ],
-    })
-  )
-
-  // SECTION 3: BIDDER'S REMITTANCE ACCOUNT DETAILS TABLE
-  bodyParagraphs.push(
     new Paragraph({
       spacing: { before: 200, after: 80 },
-      children: [
-        new TextRun({
-          text: `3. BIDDER'S CORPORATE REMITTANCE ACCOUNT DETAILS (${RBP_COMPANY.name})`,
-          bold: true,
-          size: 19,
-          color: '1E3A8A',
-          font: 'Arial',
-        }),
-      ],
+      children: [new TextRun({ text: 'Beneficiary account (as per Tender)', bold: true, size: 19, font: 'Arial' })],
     }),
     new Table({
       width: { size: 100, type: WidthType.PERCENTAGE },
       borders: standardCellBorder,
       rows: [
-        createTableRow('Remitter / Account Holder Name', emdData.selfAccount.accountHolder || RBP_COMPANY.name),
-        createTableRow('Bidder Bank Name', emdData.selfAccount.bankName || 'Not Specified'),
-        createTableRow('Account Number', emdData.selfAccount.accountNo || 'Not Specified'),
-        createTableRow('IFSC Code', emdData.selfAccount.ifsc || 'Not Specified'),
-        createTableRow('Branch Name / Address', emdData.selfAccount.branch || 'Not Specified'),
+        createTableRow('Name of A/c', emdData.departmentAccount.accountHolder || ''),
+        createTableRow('Bank & Branch Name', [emdData.departmentAccount.bankName, emdData.departmentAccount.branch].filter(Boolean).join(', ')),
+        createTableRow('Bank Account Number', emdData.departmentAccount.accountNo),
+        createTableRow('Branch IFSC Code', emdData.departmentAccount.ifsc),
+      ],
+    }),
+    new Paragraph({
+      spacing: { before: 120, after: 60 },
+      children: [
+        new TextRun({
+          text: 'Note: The EMD and the Tender Document Fee are deposited as a single NEFT/RTGS transaction in the above account.',
+          size: 17,
+          color: '475569',
+          font: 'Arial',
+        }),
       ],
     })
   )
@@ -869,31 +855,24 @@ export async function generateEmdPdf(
     cursorY += 4
   }
 
-  // 1. Transaction Particulars Table
-  drawTable('1. EMD PAYMENT & TRANSACTION PARTICULARS', [
-    ['Total EMD Amount Remitted', `₹ ${!isNaN(Number(emdData.amount)) ? Number(emdData.amount).toLocaleString('en-IN') : emdData.amount} (${docPayload.amountInWords || numberToIndianWords(emdData.amount)})`],
-    ['UTR / Bank Transaction Ref No.', emdData.utrNumber || 'Not Specified'],
-    ['Remittance / Payment Date', emdData.date || new Date().toISOString().slice(0, 10)],
-    ['Payment Mode', 'Online Electronic Fund Transfer (RTGS / NEFT)'],
-    ['Transaction Status', 'Confirmed & Debited from Bidder Account'],
+  // Tender-prescribed format: "Details of EMD and Tender Document Fee"
+  drawTable('DETAILS OF EMD AND TENDER DOCUMENT FEE', [
+    ['Tender No. and Date', `${docPayload.tenderRefNo}${tender.bid?.rfsDate ? ` dated ${tender.bid.rfsDate}` : ''}`],
+    ['Name of the Bidder', RBP_COMPANY.name],
+    ['(i) Name of the bank', emdData.selfAccount.bankName],
+    ['(ii) Branch', emdData.selfAccount.branch || ''],
+    ['(iii) IFS Code', emdData.selfAccount.ifsc],
+    ['(iv) Account No.', emdData.selfAccount.accountNo],
+    ['(v) Transaction reference number', emdData.utrNumber || ''],
+    ['(vi) Date of transaction', emdData.date || ''],
+    ['(vii) EMD + Bid Document Fee', emdAmountLine(tender, emdData.amount)],
   ])
 
-  // 2. Department Beneficiary Table
-  drawTable('2. DEPARTMENT BENEFICIARY ACCOUNT DETAILS (AS PER TENDER NIT)', [
-    ['Beneficiary / Account Holder', emdData.departmentAccount.accountHolder || 'Designated Tender Authority'],
-    ['Department Bank Name', emdData.departmentAccount.bankName || 'Not Specified'],
-    ['Account Number', emdData.departmentAccount.accountNo || 'Not Specified'],
-    ['IFSC Code', emdData.departmentAccount.ifsc || 'Not Specified'],
-    ['Branch Name / Address', emdData.departmentAccount.branch || 'Not Specified'],
-  ])
-
-  // 3. Bidder Account Table
-  drawTable(`3. BIDDER'S CORPORATE REMITTANCE ACCOUNT (${RBP_COMPANY.name})`, [
-    ['Remitter Account Holder Name', emdData.selfAccount.accountHolder || RBP_COMPANY.name],
-    ['Bidder Bank Name', emdData.selfAccount.bankName || 'Not Specified'],
-    ['Account Number', emdData.selfAccount.accountNo || 'Not Specified'],
-    ['IFSC Code', emdData.selfAccount.ifsc || 'Not Specified'],
-    ['Branch Name / Address', emdData.selfAccount.branch || 'Not Specified'],
+  drawTable('BENEFICIARY ACCOUNT (AS PER TENDER)', [
+    ['Name of A/c', emdData.departmentAccount.accountHolder || ''],
+    ['Bank & Branch Name', [emdData.departmentAccount.bankName, emdData.departmentAccount.branch].filter(Boolean).join(', ')],
+    ['Bank Account Number', emdData.departmentAccount.accountNo],
+    ['Branch IFSC Code', emdData.departmentAccount.ifsc],
   ])
 
   // Signatory Block

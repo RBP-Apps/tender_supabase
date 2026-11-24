@@ -121,11 +121,18 @@ export function autoFetchEmdDetails(tender: Tender): EmdAutoFetchResult {
       if (pkgsWithEmd.length > 0) {
         const totalLakh = pkgsWithEmd.reduce((sum, p) => sum + (parseFloat(p.emdLakh) || 0), 0)
         // Convert to pure numeric representation (e.g. 3 Lakh -> 300000)
-        const numericVal = Math.round(totalLakh * 100000)
-        amount = String(numericVal)
+        const emdRupees = Math.round(totalLakh * 100000)
+        // Many tenders (e.g. CREDA) require EMD + bid-document fee (incl. GST) as ONE transaction.
+        // The fee comes from the tender's own extracted "fee + GST" value.
+        const feeMatch = (tender.bid?.tenderFeePlusGst || '').replace(/,/g, '').match(/\d+(?:\.\d+)?/)
+        const feeRupees = feeMatch ? Math.round(parseFloat(feeMatch[0])) : 0
+        const inr = (n: number) => `Rs. ${n.toLocaleString('en-IN')}`
+        amount = String(emdRupees + feeRupees)
         amountStatus = 'auto-fetched'
-        amountSource = 'Original Tender Bid Packages (NIT Document)'
-        pageClauseRef = `Package(s): ${pkgsWithEmd.map(p => `${p.code || 'Pkg'} (${p.emdLakh}L)`).join(', ')}`
+        amountSource = feeRupees
+          ? `Tender: EMD ${inr(emdRupees)} + Bid Document Fee incl. GST ${inr(feeRupees)} = ${inr(emdRupees + feeRupees)} (single transaction – edit if this tender pays them separately)`
+          : 'Original Tender Bid Packages (NIT Document)'
+        pageClauseRef = `Package(s): ${pkgsWithEmd.map(p => `${p.code || 'Pkg'} (${p.emdLakh}L)`).join(', ')}${feeRupees ? ` + fee ${inr(feeRupees)}` : ''}`
       } else if (tender.bid?.tenderFeePerPackage && tender.bid.tenderFeePerPackage.trim()) {
         // Check tender fee / fee clause
         amount = parseAmountToNumeric(tender.bid.tenderFeePerPackage.trim())

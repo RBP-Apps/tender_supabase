@@ -33,7 +33,7 @@ const criteriaDetailSchema = z.object({
   bidderSourceQuote: z.string().describe('Verbatim text from the bidder document that shows the submitted value, or ""'),
   comparisonResult: z.string().describe('Requirement vs submitted comparison with numbers, e.g. "Submitted ₹5.20 Cr ≥ required ₹4.50 Cr"'),
   evidenceSituation: situationEnum,
-  rejectionReason: z.string().optional().describe('Specific rejection reason if status is Fail'),
+  rejectionReason: z.string().nullable().describe('Specific rejection reason if status is Fail, else null'),
   isMandatory: z.boolean().describe('True if this is a mandatory pre-qualification gate per the tender'),
 })
 
@@ -42,7 +42,7 @@ const checkSchema = z.object({
   required: z.string(),
   submitted: z.string(),
   notes: z.string(),
-  shortfallOrSurplus: z.string().optional(),
+  shortfallOrSurplus: z.string().nullable(),
 })
 
 const eligibilitySchema = z.object({
@@ -53,14 +53,14 @@ const eligibilitySchema = z.object({
   matchedCriteria: z.array(z.string()),
   failedCriteria: z.array(z.string()),
   missingRequirements: z.array(z.string()),
-  insufficientInfoNotes: z.string().optional(),
+  insufficientInfoNotes: z.string().nullable(),
   criteriaBreakdown: z.array(criteriaDetailSchema).describe('One row for EVERY individual eligibility requirement found in the tender'),
   turnoverCheck: checkSchema,
   experienceCheck: checkSchema,
   documentsCheck: z.object({
     status: statusEnum,
     notes: z.string(),
-    missingDocs: z.array(z.string()).optional(),
+    missingDocs: z.array(z.string()),
   }),
 })
 
@@ -84,105 +84,6 @@ const TENDER_ELIGIBILITY_QUERIES = [
 ]
 
 const MAX_DOC_TEXT_CHARS = 10000
-
-function groundTruthEligibilityResult(
-  tender: any,
-  submittedData: any,
-  submittedAudit: Array<{ slot: string; name?: string; situation: string }>
-): Eligibility {
-  const hasTurnover = !!submittedData?.turnoverDoc
-  const hasExp = !!submittedData?.experienceDoc
-  const hasReg = !!submittedData?.vendorRegDoc
-  const hasOther = !!submittedData?.otherDoc || (Array.isArray(submittedData?.otherDocs) && submittedData.otherDocs.length > 0)
-
-  const rows: Row[] = [
-    {
-      criteriaName: 'Annual Financial Turnover',
-      status: hasTurnover ? 'Pass' : 'Fail',
-      tenderRequirement: 'Minimum average annual turnover of ₹ 3.00 Cr / ₹ 1.50 Cr in the last three consecutive financial years.',
-      tenderSourceDocument: tender?.tenderDoc?.name || 'Image_Module_Tender.pdf',
-      tenderSourcePage: 'Page 4',
-      tenderSourceQuote: 'Average Annual Financial Turnover: Certified by Chartered Accountant with UDIN for the last three consecutive financial years.',
-      userSubmitted: hasTurnover ? `${submittedData.turnoverDoc.name || 'Turnover Certificate'} (Uploaded)` : 'Not uploaded',
-      bidderSourceQuote: hasTurnover ? 'Audited balance sheet and CA turnover certificate submitted' : '',
-      comparisonResult: hasTurnover ? 'Submitted CA Turnover Certificate meets the minimum required turnover criteria.' : 'Mandatory turnover document is missing.',
-      evidenceSituation: hasTurnover ? 'requirement-satisfied' : 'document-not-uploaded',
-      isMandatory: true,
-    },
-    {
-      criteriaName: 'Past Technical Experience',
-      status: hasExp ? 'Pass' : 'Fail',
-      tenderRequirement: 'Experience in supply of SPV Modules to Government / Semi-Govt / PSU or installation of solar power systems.',
-      tenderSourceDocument: tender?.tenderDoc?.name || 'Image_Module_Tender.pdf',
-      tenderSourcePage: 'Page 4',
-      tenderSourceQuote: 'Experience: Bidders must have experience in supply of SPV Modules to Government / Semi-Govt / PSU.',
-      userSubmitted: hasExp ? `${submittedData.experienceDoc.name || 'Experience Certificate'} (Uploaded)` : 'Not uploaded',
-      bidderSourceQuote: hasExp ? 'Past work orders and completion certificates submitted' : '',
-      comparisonResult: hasExp ? 'Submitted past technical experience documents satisfy the tender eligibility condition.' : 'Past technical experience proof is missing.',
-      evidenceSituation: hasExp ? 'requirement-satisfied' : 'document-not-uploaded',
-      isMandatory: true,
-    },
-    {
-      criteriaName: 'CREDA Vendor Registration',
-      status: hasReg ? 'Pass' : 'Pending',
-      tenderRequirement: 'Valid vendor registration certificate with CREDA in Solar Photovoltaic Module category.',
-      tenderSourceDocument: tender?.tenderDoc?.name || 'Image_Module_Tender.pdf',
-      tenderSourcePage: 'Page 4',
-      tenderSourceQuote: 'Registration with CREDA: Copy of valid registration with CREDA for SPV Modules.',
-      userSubmitted: hasReg ? `${submittedData.vendorRegDoc.name || 'CREDA Registration'} (Uploaded)` : 'Not uploaded',
-      bidderSourceQuote: hasReg ? 'Valid CREDA registration certificate enclosed' : '',
-      comparisonResult: hasReg ? 'Vendor registration in required category is valid.' : 'Vendor registration copy not provided.',
-      evidenceSituation: hasReg ? 'requirement-satisfied' : 'document-not-uploaded',
-      isMandatory: true,
-    },
-    {
-      criteriaName: 'Statutory Documents & Mandatory Annexures',
-      status: hasOther ? 'Pass' : 'Pending',
-      tenderRequirement: 'Submission of GST, PAN, Non-Blacklisting (Annexure IV), No Deviation (Annexure V), and Same Make Declaration (Annexure VI).',
-      tenderSourceDocument: tender?.tenderDoc?.name || 'Image_Module_Tender.pdf',
-      tenderSourcePage: 'Page 5',
-      tenderSourceQuote: 'Checklist of documents to be uploaded by the bidder.',
-      userSubmitted: hasOther ? 'Submitted supporting documents & checklist annexures' : 'Partial / Not uploaded',
-      bidderSourceQuote: hasOther ? 'Required statutory undertaking documents enclosed' : '',
-      comparisonResult: hasOther ? 'Mandatory statutory and annexure declarations have been provided.' : 'Supporting documents pending upload.',
-      evidenceSituation: hasOther ? 'requirement-satisfied' : 'needs-manual-review',
-      isMandatory: false,
-    },
-  ]
-
-  const allMandatoryPass = rows.filter(r => r.isMandatory).every(r => r.status === 'Pass')
-  const status = allMandatoryPass ? 'Eligible' : 'Partially Eligible'
-
-  return {
-    status,
-    summary: allMandatoryPass
-      ? 'Bidder satisfies all verified pre-qualification eligibility criteria per the tender document.'
-      : 'Some mandatory eligibility documents are pending or require additional verification.',
-    overallReasoning: 'Turnover, technical experience, and regulatory vendor compliance have been cross-checked against the tender requirements.',
-    conclusion: allMandatoryPass ? 'ELIGIBLE: Pre-qualification criteria met.' : 'PARTIALLY ELIGIBLE: Complete remaining document submissions.',
-    matchedCriteria: rows.filter(r => r.status === 'Pass').map(r => r.criteriaName),
-    failedCriteria: rows.filter(r => r.status === 'Fail').map(r => r.criteriaName),
-    missingRequirements: rows.filter(r => r.status === 'Fail' || r.status === 'Pending').map(r => r.criteriaName),
-    criteriaBreakdown: rows,
-    turnoverCheck: {
-      status: hasTurnover ? 'Pass' : 'Fail',
-      required: 'Min ₹ 3.00 Cr / ₹ 1.50 Cr',
-      submitted: hasTurnover ? (submittedData?.turnoverDoc?.name || 'Submitted') : 'Not uploaded',
-      notes: hasTurnover ? 'Turnover criteria satisfied' : 'Turnover document missing',
-    },
-    experienceCheck: {
-      status: hasExp ? 'Pass' : 'Fail',
-      required: 'Similar solar module supply / system installation',
-      submitted: hasExp ? (submittedData?.experienceDoc?.name || 'Submitted') : 'Not uploaded',
-      notes: hasExp ? 'Technical experience criteria satisfied' : 'Experience document missing',
-    },
-    documentsCheck: {
-      status: hasOther ? 'Pass' : 'Under Review',
-      notes: hasOther ? 'Statutory documents provided' : 'Pending review of attached documents',
-      missingDocs: [],
-    },
-  }
-}
 
 function pagesText(chunks: DocumentPageChunk[]): string {
   return chunks
@@ -211,9 +112,10 @@ function manualReviewResult(reason: string, submittedAudit: Array<{ slot: string
     bidderSourceQuote: '',
     comparisonResult: 'Not compared – manual verification required.',
     evidenceSituation: s.situation === 'Not uploaded' ? 'document-not-uploaded' : 'needs-manual-review',
+    rejectionReason: null,
     isMandatory: false,
   }))
-  const check = { status: 'Under Review' as const, required: 'Not evaluated', submitted: 'Not evaluated', notes: reason }
+  const check = { status: 'Under Review' as const, required: 'Not evaluated', submitted: 'Not evaluated', notes: reason, shortfallOrSurplus: null }
   return {
     status: 'Insufficient Information',
     summary: `AI eligibility evaluation could not be completed: ${reason} No criterion has been marked as passed.`,
@@ -440,8 +342,8 @@ Produce the structured eligibility evaluation. List EVERY individual eligibility
     let ai: Eligibility
     let aiFailed = false
     if (!apiKey) {
-      ai = groundTruthEligibilityResult(tender, submittedData, submittedAudit)
-      aiFailed = false
+      ai = manualReviewResult('AI service is not configured (OPENAI_API_KEY missing).', submittedAudit)
+      aiFailed = true
     } else {
       try {
         const openai = createOpenAI({ apiKey })
@@ -457,8 +359,9 @@ Produce the structured eligibility evaluation. List EVERY individual eligibility
         ai = result.object
       } catch (aiErr: any) {
         console.warn('Eligibility AI call failed, using verified criteria audit:', aiErr?.message || aiErr)
-        ai = groundTruthEligibilityResult(tender, submittedData, submittedAudit)
-        aiFailed = false
+        // No stand-in data: a hard-coded result from another tender must never be shown as this tender's.
+        ai = manualReviewResult(`The AI evaluation failed (${String(aiErr?.message || aiErr).slice(0, 160)}). Please retry.`, submittedAudit)
+        aiFailed = true
       }
     }
     if (aiFailed) warnings.push('AI evaluation did not run – result is "Insufficient Information" and every criterion needs manual verification.')
@@ -523,7 +426,11 @@ Produce the structured eligibility evaluation. List EVERY individual eligibility
     }
 
     // Score is a computed ratio (mandatory criteria verified as passing), not a model guess.
-    const score = mandatory.length ? Math.round((mandatoryPass / mandatory.length) * 100) : 0
+    // If the model flagged none as mandatory, score over every requirement that the tender actually states.
+    const scored = mandatory.length ? mandatory : breakdown.filter((r: any) => r.evidenceSituation !== 'requirement-not-in-tender')
+    const scoredPass = scored.filter((r: any) => r.status === 'Pass').length
+    const score = scored.length ? Math.round((scoredPass / scored.length) * 100) : 0
+    const scoreDetail = `${scoredPass} of ${scored.length} tender requirement(s) verified as met`
 
     const finalSummary =
       status !== ai.status
@@ -537,6 +444,7 @@ Produce the structured eligibility evaluation. List EVERY individual eligibility
         ...ai,
         status,
         score,
+        scoreDetail,
         summary: finalSummary,
         criteriaBreakdown: breakdown,
         insufficientInfoNotes: [ai.insufficientInfoNotes, ...warnings].filter(Boolean).join(' ') || undefined,

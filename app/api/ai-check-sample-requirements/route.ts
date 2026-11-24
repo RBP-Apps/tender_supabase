@@ -61,19 +61,19 @@ const masterRequirementItemSchema = z.object({
     .array(z.string())
     .describe('List of standards, accreditations or equipment models explicitly cited in document'),
   confidence: z.enum(['high', 'medium', 'low']),
-  bulletPoints: z.array(z.string()).optional().describe('Clear bullet points breaking down each key condition or requirement rule for bidder'),
-  importantNotes: z.array(z.string()).optional().describe('Critical compliance warnings or consequences for non-submission'),
-  corrigendumNote: z.string().optional().describe('Corrigendum/amendment changes modifying schedule, dates, locations, or requirements'),
-  requiredDocumentSummary: z.string().optional().describe('Concise description of required document or physical item to submit'),
+  bulletPoints: z.array(z.string()).describe('Clear bullet points breaking down each key condition or requirement rule for bidder'),
+  importantNotes: z.array(z.string()).describe('Critical compliance warnings or consequences for non-submission'),
+  corrigendumNote: z.string().nullable().describe('Corrigendum/amendment changes modifying schedule, dates, locations, or requirements'),
+  requiredDocumentSummary: z.string().nullable().describe('Concise description of required document or physical item to submit'),
 })
 
 const otherDocumentItemSchema = z.object({
   sNo: z.number().describe('Serial number (1, 2, 3...)'),
   documentName: z.string().describe('Name of document required (e.g. PAN Card, GST Registration, Bidder Undertaking, Non-Blacklisting Self Declaration, etc.)'),
   requirement: z.string().describe('Requirement condition: Mandatory, Required, Dealer/Distributor ke liye, Manufacturer ke liye, or specific condition'),
-  clauseOrSection: z.string().optional().describe('Clause or section reference if found in checklist/NIT'),
-  pageNumber: z.string().optional().describe('Page number where requested'),
-  description: z.string().optional().describe('Short note or description of requirement'),
+  clauseOrSection: z.string().nullable().describe('Clause or section reference if found in checklist/NIT'),
+  pageNumber: z.string().nullable().describe('Page number where requested'),
+  description: z.string().nullable().describe('Short note or description of requirement'),
   evidenceQuote: z.string().describe('Verbatim text copied from the tender page that demands this document'),
 })
 
@@ -82,7 +82,7 @@ const masterRequirementsAuditSchema = z.object({
   testReport: masterRequirementItemSchema,
   bisCertificate: masterRequirementItemSchema,
   productSample: masterRequirementItemSchema,
-  otherDocuments: z.array(otherDocumentItemSchema).optional().describe('List of other mandatory/required documents demanded in tender checklist, cover 1, eligibility criteria, or Section 1'),
+  otherDocuments: z.array(otherDocumentItemSchema).describe('List of other mandatory/required documents demanded in tender checklist, cover 1, eligibility criteria, or Section 1'),
   summary: z.string().describe('Executive summary of the document requirement audits'),
 })
 
@@ -455,6 +455,9 @@ Follow all rules of the MASTER SYSTEM PROMPT. Ground every field strictly in the
         productSample: formatFieldAudit(output.productSample),
         otherDocuments: (output.otherDocuments || []).map((d: any) => ({
           ...d,
+          clauseOrSection: d.clauseOrSection ?? undefined,
+          pageNumber: d.pageNumber ?? undefined,
+          description: d.description ?? undefined,
           quoteVerified: quoteVerified(d.evidenceQuote, d.pageNumber),
         })),
         checkedAt: new Date().toISOString(),

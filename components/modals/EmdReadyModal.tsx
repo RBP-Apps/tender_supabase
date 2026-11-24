@@ -2013,99 +2013,55 @@ Format your response in structured markdown:
 
                               
 
-                              {/* Table 1: EMD Payment Particulars */}
-                              <div className="space-y-0.5 flex-shrink-0">
-                                <div className="bg-slate-900 text-white px-2.5 py-1 rounded-t text-[9.5px] font-bold tracking-wider uppercase flex items-center justify-between">
-                                  <span>1. EMD Payment &amp; Bank Transaction Particulars</span>
-                                  <span className="text-emerald-400 font-mono text-[9px]">Status: Confirmed &amp; Debited</span>
-                                </div>
-                                <table className="w-full border-collapse border border-slate-300 text-[10px]">
-                                  <tbody>
-                                    <tr className="border-b border-slate-200 bg-white">
-                                      <td className="w-2/5 p-1.5 font-bold bg-slate-50 border-r border-slate-300 text-slate-700">Total EMD Amount Remitted</td>
-                                      <td className="p-1.5 font-bold text-blue-900">
-                                        <span className="text-sm font-extrabold text-blue-950">
-                                          ₹ {!isNaN(Number(amount)) && Number(amount) > 0 ? Number(amount).toLocaleString('en-IN') : amount}
-                                        </span>
-                                        <span className="ml-2 text-[9.5px] font-semibold text-blue-700 italic">({editedDoc?.amountInWords || numberToIndianWords(amount)})</span>
-                                      </td>
-                                    </tr>
-                                    <tr className="border-b border-slate-200 bg-slate-50/40">
-                                      <td className="p-1.5 font-bold bg-slate-50 border-r border-slate-300 text-slate-700">UTR / Bank Transaction Ref No.</td>
-                                      <td className="p-1.5 font-mono font-bold text-[10.5px] text-purple-900">
-                                        {utrNumber.trim() ? (
-                                          utrNumber.trim()
-                                        ) : (
-                                          <span className="font-sans font-semibold text-amber-800 text-[10px]">
-                                            Not Specified (Pending Transaction)
-                                          </span>
-                                        )}
-                                      </td>
-                                    </tr>
-                                    <tr className="border-b border-slate-200 bg-white">
-                                      <td className="p-1.5 font-bold bg-slate-50 border-r border-slate-300 text-slate-700">Remittance Date &amp; Mode</td>
-                                      <td className="p-1.5 text-slate-800 font-medium">
-                                        {date.trim() ? (
-                                          date.trim()
-                                        ) : (
-                                          <span className="font-semibold text-amber-800 text-[10px]">
-                                            Date Pending
-                                          </span>
-                                        )}{' '}
-                                        • Online Electronic Transfer (RTGS / NEFT)
-                                      </td>
-                                    </tr>
-                                  </tbody>
-                                </table>
-                              </div>
+                              {/* Tender-prescribed format (Details of EMD and Tender Document Fee) */}
+                              {(() => {
+                                const emdRs = Math.round(((tender.bid?.packages || []).reduce((n, p) => n + (parseFloat(p.emdLakh) || 0), 0)) * 100000)
+                                const feeM = (tender.bid?.tenderFeePlusGst || '').replace(/,/g, '').match(/\d+(?:\.\d+)?/)
+                                const feeRs = feeM ? Math.round(parseFloat(feeM[0])) : 0
+                                const total = Number(amount)
+                                const inr = (n: number) => n.toLocaleString('en-IN')
+                                const split = emdRs > 0 && feeRs > 0 && total === emdRs + feeRs ? ` (Rs. ${inr(emdRs)} + Rs. ${inr(feeRs)})` : ''
+                                const row = (label: string, value: React.ReactNode, mono = false) => (
+                                  <tr className="border-b border-slate-300">
+                                    <td className="w-[46%] p-1.5 border-r border-slate-300 text-slate-800">{label}</td>
+                                    <td className={`p-1.5 text-slate-900 ${mono ? 'font-mono' : ''}`}>{value || <span className="text-slate-400">__________________</span>}</td>
+                                  </tr>
+                                )
+                                return (
+                                  <div className="space-y-2 flex-shrink-0">
+                                    <p className="text-[10px] text-slate-700">
+                                      A scanned copy of the EMD and Bid Document fee transaction is to be uploaded in the format below.
+                                    </p>
+                                    <table className="w-full border-collapse border border-slate-400 text-[10px]">
+                                      <tbody>
+                                        {row('Tender No. and Date', `${editedDoc?.tenderRefNo || tender.bid?.rfsNo || tender.id}${tender.bid?.rfsDate ? ` dated ${tender.bid.rfsDate}` : ''}`)}
+                                        {row('Name of the Bidder', RBP_COMPANY.name)}
+                                        {row("Bidder's Bank Account Details", '')}
+                                        {row('(i) Name of the bank', selfAccount.bankName)}
+                                        {row('(ii) Branch', selfAccount.branch)}
+                                        {row('(iii) IFS Code', selfAccount.ifsc, true)}
+                                        {row('(iv) Account No.', selfAccount.accountNo, true)}
+                                        {row('(v) Transaction reference number', utrNumber.trim(), true)}
+                                        {row('(vi) Date of transaction', date.trim())}
+                                        {row('(vii) EMD + Bid Document Fee', amount ? `Rs. ${inr(total)} /-${split}` : '')}
+                                      </tbody>
+                                    </table>
+                                    <p className="text-[10px] font-bold text-slate-800 pt-1">Beneficiary account (as per Tender)</p>
+                                    <table className="w-full border-collapse border border-slate-400 text-[10px]">
+                                      <tbody>
+                                        {row('Name of A/c', deptAccount.accountHolder)}
+                                        {row('Bank & Branch Name', [deptAccount.bankName, deptAccount.branch].filter(Boolean).join(', '))}
+                                        {row('Bank Account Number', deptAccount.accountNo, true)}
+                                        {row('Branch IFSC Code', deptAccount.ifsc, true)}
+                                      </tbody>
+                                    </table>
+                                    <p className="text-[9.5px] text-slate-600">
+                                      Note: The EMD and the Tender Document Fee are deposited as a single NEFT/RTGS transaction in the above account.
+                                    </p>
+                                  </div>
+                                )
+                              })()}
 
-                              {/* Table 2: Department Beneficiary Details */}
-                              <div className="space-y-0.5 flex-shrink-0">
-                                <div className="bg-blue-950 text-white px-2.5 py-1 rounded-t text-[9.5px] font-bold tracking-wider uppercase">
-                                  2. Department Beneficiary Account Details (As per Tender NIT)
-                                </div>
-                                <table className="w-full border-collapse border border-slate-300 text-[10px]">
-                                  <tbody>
-                                    <tr className="border-b border-slate-200">
-                                      <td className="w-2/5 p-1.5 font-bold bg-slate-50 border-r border-slate-300 text-slate-700">Beneficiary / Account Holder</td>
-                                      <td className="p-1.5 font-semibold text-slate-800">{deptAccount.accountHolder || 'Designated Tender Authority'}</td>
-                                    </tr>
-                                    <tr className="border-b border-slate-200 bg-slate-50/40">
-                                      <td className="p-1.5 font-bold bg-slate-50 border-r border-slate-300 text-slate-700">Department Bank &amp; Branch</td>
-                                      <td className="p-1.5 text-slate-800">{deptAccount.bankName || 'Not Specified'} • {deptAccount.branch || 'Not Specified'}</td>
-                                    </tr>
-                                    <tr>
-                                      <td className="p-1.5 font-bold bg-slate-50 border-r border-slate-300 text-slate-700">Account Number &amp; IFSC</td>
-                                      <td className="p-1.5 font-mono font-bold text-slate-900">{deptAccount.accountNo || 'Not Specified'} • IFSC: {deptAccount.ifsc || 'Not Specified'}</td>
-                                    </tr>
-                                  </tbody>
-                                </table>
-                              </div>
-
-                              {/* Table 3: Bidder Remittance Account Details */}
-                              <div className="space-y-0.5 flex-shrink-0">
-                                <div className="bg-indigo-950 text-white px-2.5 py-1 rounded-t text-[9.5px] font-bold tracking-wider uppercase">
-                                  3. Bidder&apos;s Corporate Remittance Account ({RBP_COMPANY.name})
-                                </div>
-                                <table className="w-full border-collapse border border-slate-300 text-[10px]">
-                                  <tbody>
-                                    <tr className="border-b border-slate-200">
-                                      <td className="w-2/5 p-1.5 font-bold bg-slate-50 border-r border-slate-300 text-slate-700">Remitter Account Holder</td>
-                                      <td className="p-1.5 font-semibold text-slate-800">{selfAccount.accountHolder || RBP_COMPANY.name}</td>
-                                    </tr>
-                                    <tr className="border-b border-slate-200 bg-slate-50/40">
-                                      <td className="p-1.5 font-bold bg-slate-50 border-r border-slate-300 text-slate-700">Bidder Bank &amp; Branch</td>
-                                      <td className="p-1.5 text-slate-800">{selfAccount.bankName || 'Not Specified'} • {selfAccount.branch || 'Not Specified'}</td>
-                                    </tr>
-                                    <tr>
-                                      <td className="p-1.5 font-bold bg-slate-50 border-r border-slate-300 text-slate-700">Account Number &amp; IFSC</td>
-                                      <td className="p-1.5 font-mono font-bold text-slate-900">{selfAccount.accountNo || 'Not Specified'} • IFSC: {selfAccount.ifsc || 'Not Specified'}</td>
-                                    </tr>
-                                  </tbody>
-                                </table>
-                              </div>
-
-                              
                               {/* Signature block (single-page format) */}
                               <div className="pt-3 flex items-end justify-between gap-6 flex-shrink-0">
                                 <div className="space-y-0.5 text-[10.5px] text-slate-700">

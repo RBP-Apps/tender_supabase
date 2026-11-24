@@ -309,6 +309,12 @@ export async function validateAndFillExtraction(opts: {
 
 /** "17:00:00" -> "17:00 Hrs.", digits-only days/EMD, ISO dates only. */
 export function normalizeExtraction(x: TenderExtraction) {
+  // The model sometimes writes the literal word from the prompt ("Null", "N/A") instead of a real null.
+  const EMPTYISH = /^\s*(null|none|n\/a|na|nil|not\s+(mentioned|specified|available|applicable|found)|-+)\s*\.?\s*$/i
+  for (const k of Object.keys(x) as (keyof TenderExtraction)[]) {
+    const v: any = (x as any)[k]
+    if (typeof v === 'string' && EMPTYISH.test(v)) (x as any)[k] = null
+  }
   if (x.bidDeadlineTime) {
     const m = /^(\d{1,2}):(\d{2})(?::\d{2})?$/.exec(x.bidDeadlineTime.trim())
     if (m) x.bidDeadlineTime = `${m[1].padStart(2, '0')}:${m[2]} Hrs.`

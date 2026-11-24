@@ -424,7 +424,7 @@ export function MasterDocumentDossierModal({
     // Clean generated PDF fallback
     const generated = generatePdfDocument(
       doc.fieldLabel || doc.name,
-      `# OFFICIAL TENDER COMPLIANCE DOCUMENT
+      `# CHECKLIST ITEM - PLACEHOLDER
 Document Title: ${doc.fieldLabel || doc.name}
 File Name: ${doc.name}
 Tender Title: ${tender.title}
@@ -433,12 +433,10 @@ Authority: ${tender.authority}
 Category: ${doc.source || 'Stage 05 Master Dossier'}
 Uploaded Date: ${new Date(doc.uploadedAt).toLocaleDateString('en-IN')}
 
-## STATUTORY VERIFICATION SUMMARY
-This document has been compiled and verified for the official tender checklist.
-All statutory parameters, technical test reports, financial criteria, and affidavits are confirmed compliant.
-
-Tender ID: ${tender.id}
-Status: VERIFIED & COMPLIANT
+## STATUS: PENDING UPLOAD
+No file has been uploaded for this checklist item yet.
+This sheet is only a placeholder and is NOT proof that the requirement is met.
+Upload the actual document in the earlier stage or in Document Ready.
 `
     )
     const a = document.createElement('a')
@@ -505,7 +503,7 @@ Status: VERIFIED & COMPLIANT
       const docLabel = previewDoc.fieldLabel || previewDoc.name
       const generated = generatePdfDocument(
         docLabel,
-        `# OFFICIAL TENDER COMPLIANCE DOCUMENT
+        `# CHECKLIST ITEM - PLACEHOLDER
 Document Title: ${docLabel}
 File Name: ${previewDoc.name}
 Tender Title: ${tender.title}
@@ -514,12 +512,10 @@ Authority: ${tender.authority}
 Category: ${previewDoc.source || 'Stage 05 Master Dossier'}
 Uploaded Date: ${new Date(previewDoc.uploadedAt).toLocaleDateString('en-IN')}
 
-## STATUTORY VERIFICATION SUMMARY
-This document has been verified against the tender checklist requirements for Stage 05 (Document Ready).
-All criteria, test reports, and statutory declarations are complete and verified.
-
-Tender Reference: ${tender.id}
-Checklist Verification: COMPLIANT & APPROVED
+## STATUS: PENDING UPLOAD
+No file has been uploaded for this checklist item yet.
+This sheet is only a placeholder and is NOT proof that the requirement is met.
+Upload the actual document in the earlier stage or in Document Ready.
 `
       )
       createdObjectUrl = generated.url
