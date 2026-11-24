@@ -340,6 +340,8 @@ For each document requirement, assign one of the following statuses:
 
 Checklist rule: if the tender's list of documents to be submitted (checklist / Cover-1 / technical bid envelope) names the document (e.g. "Copy of Test reports", "MAF", "BIS certificate"), that is an explicit submission requirement -> MANDATORY (quote the checklist line and its page). Only use NOT REQUIRED when the passages above contain no mention at all.
 
+BIS rule: a tender that only says materials must conform to BIS / ISI / IS / IEC standards (specification wording) does NOT require a BIS certificate to be submitted. Return NOT REQUIRED for the BIS Certificate (finalAnswer: no separate BIS certificate is demanded; standards are only a specification requirement) unless the checklist / documents-to-submit list or an eligibility clause explicitly asks the bidder to submit a BIS / CRS / ISI certificate or licence. Do not return MANUAL VERIFICATION REQUIRED merely because a standard is mentioned. The same applies to the Product Sample: a mention of 'samples' in general conditions is not a sample-submission requirement.
+
 Important distinctions:
 - Technical standard mentioned DOES NOT automatically mean a separate certificate must be submitted.
 - Product compliance DOES NOT automatically mean a test report must be uploaded.
