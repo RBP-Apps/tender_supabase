@@ -67,7 +67,7 @@ const SCALAR_FIELDS: FieldSpec[] = [
   { key: 'turnoverRequirement', label: 'Turnover requirement', ask: 'Turnover eligibility requirement, verbatim as far as possible', keywords: ['turnover', 'turn over', 'net worth', 'financial year', 'annual'] },
 ]
 
-const COMPONENT_KEYWORDS = ['make', 'approved make', 'bis', 'is 14286', 'iec 61215', 'standard', 'technical specification', 'almm', 'specification', 'compliance']
+const COMPONENT_KEYWORDS = ['make', 'approved make', 'bis', 'is 14286', 'iec 61215', 'standard', 'technical specification', 'technical specification of', 'specification of', 'almm', 'specification', 'compliance', 'acdb', 'dcdb', 'cable', 'earthing', 'schedule of', 'bill of quantit']
 const EMD_KEYWORDS = ['emd', 'earnest money', 'bid security', 'lakh', 'rs.']
 const BANK_KEYWORDS = ['ifsc', 'account no', 'bank', 'neft', 'rtgs', 'beneficiary']
 
@@ -139,7 +139,7 @@ const recoverySchema = z.object({
   ),
   technicalComponents: z
     .array(z.object({ item: z.string(), make: z.string(), compliance: z.string() }))
-    .describe('Equipment line items with make / required standard stated in the pages. Empty if none.'),
+    .describe('Main equipment / material items the tender asks the bidder to supply, from its technical specification or schedule pages. item = item name. make = the make/OEM only if the tender names one, otherwise exactly "As per tender specification". compliance = required standard (IS/IEC/BIS) or specification clause stated for that item, else "As per tender specification". Empty if the pages list no items.'),
   componentsPage: z.number().nullable(),
   componentsQuote: z.string().nullable(),
   packages: z
@@ -235,7 +235,7 @@ export async function validateAndFillExtraction(opts: {
         if (!chosen.length) return
         const ask = [
           ...job.keys.map(k => `- key "${k.key}": ${k.ask}`),
-          job.components ? '- technicalComponents: equipment items with make(s) and required standard (IS/IEC)' : '',
+          job.components ? '- technicalComponents: the main equipment/material items to be supplied (from technical specification / schedule pages) with named make if any (else "As per tender specification") and the required standard (IS/IEC/BIS)' : '',
           job.packages ? '- packages: package/lot code, region, rfx no., EMD in Rs. Lakh' : '',
           job.bank ? '- beneficiaryBank: authority bank account for EMD/fee payment (payee only)' : '',
         ].filter(Boolean).join('\n')

@@ -147,8 +147,8 @@ export async function POST(request: Request) {
     const parts: string[] = [`<h2 style="text-align:center;font-size:15px;margin:6px 0 12px;text-decoration:underline">${esc(output.title || docName)}</h2>`]
     for (const b of output.blocks) {
       if (b.kind === 'heading') parts.push(`<p style="font-weight:bold;margin:10px 0 4px">${esc(b.text || '')}</p>`)
-      else if (b.kind === 'list') parts.push(`<p style="margin:3px 0 3px 18px">• ${esc(b.text || '')}</p>`)
-      else if (b.kind === 'signature') parts.push(`<p style="margin:26px 0 2px;text-align:right;white-space:pre-line">${esc(b.text || '')}</p>`)
+      else if (b.kind === 'list' && b.text?.trim()) parts.push(`<p style="margin:3px 0 3px 18px">• ${esc(b.text || '')}</p>`)
+      else if (b.kind === 'signature' && b.text?.trim()) parts.push(`<p style="margin:26px 0 2px;text-align:right;white-space:pre-line">${esc(b.text || '')}</p>`)
       else if (b.kind === 'table' && b.rows?.length) {
         const [head, ...rest] = b.rows
         parts.push(
