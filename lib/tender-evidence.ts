@@ -185,8 +185,8 @@ export const DOC_CLAUSE_RULES: DocClauseRule[] = [
   { key: 'bis', name: 'BIS Certificate / Licence', tender: /\bBIS\b.{0,40}(licen[cs]e|certificate|registration)|(licen[cs]e|certificate|registration).{0,40}\bBIS\b/i, bidder: /licen[cs]e\s+(document|no\.?|number)|\bR-\d{6,9}\b|\bBIS\s+(licen[cs]e|registration|certificate)\b|certificate\s+of\s+registration/i },
   { key: 'maf', name: 'Manufacturer Authorization Form (MAF)', tender: /\bMAF\b|manufacturer(?:'s|’s)?\s+authori[sz]ation/i, bidder: /manufacturer.{0,60}authori[sz]|authori[sz]ation\s+(letter|form)|hereby\s+authori[sz]e|\bMAF\s+(no|ref|letter|form)\b/i },
   { key: 'testreport', name: 'Test Reports', tender: /test\s+reports?/i, bidder: /test\s+report\s+(no|number)\b|\btest\s+report\b(?!s?\s+for\s+specific)|flash\s+test|\bSTC\s+test/i },
-  { key: 'gst', name: 'GST Registration Certificate', tender: /\bGST(IN)?\b.{0,40}(registration|certificate)|(registration|certificate).{0,40}\bGST(IN)?\b/i, bidder: /GSTIN|goods\s+and\s+services\s+tax|\b\d{2}[A-Z]{5}\d{4}[A-Z]\dZ[A-Z\d]\b/i },
-  { key: 'pan', name: 'PAN Card', tender: /\bPAN\s+(card|number|copy)\b|copy\s+of\s+(the\s+)?PAN\b/i, bidder: /permanent\s+account\s+number|income\s+tax\s+department/i },
+  { key: 'gst', name: 'GST Registration Certificate', tender: /\bGST(IN)?\b.{0,40}(registration|certificate)|(registration|certificate).{0,40}\bGST(IN)?\b|\bPAN\s*(and|&)\s*GSTIN\b/i, bidder: /registration\s+certificate|certificate\s+of\s+registration|form\s+gst\s+reg|goods\s+and\s+services\s+tax.{0,60}registration/i },
+  { key: 'pan', name: 'PAN Card', tender: /\bPAN\s+(card|number|copy)\b|copy\s+of\s+(the\s+)?PAN\b|\bPAN\s*(and|&)\s*GSTIN\b/i, bidder: /permanent\s+account\s+number|income\s+tax\s+department/i },
   { key: 'affidavit', name: 'Affidavit', tender: /\baffidavit\b/i, bidder: /affidavit|solemnly\s+affirm|notary\s+public/i },
   { key: 'iso', name: 'ISO Certificate', tender: /\bISO\s*\d{4,5}\b.{0,60}(certificate|certified|registered)|certificate.{0,60}\bISO\s*\d{4,5}\b/i, bidder: /ISO\s*\d{4,5}.{0,80}(certif|registered)|certificate.{0,80}ISO\s*\d{4,5}/i },
 ]
