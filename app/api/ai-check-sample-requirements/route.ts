@@ -149,15 +149,20 @@ export async function POST(request: Request) {
 
     // Direct clause fallback: ensure snippets are never empty when evidence chunks exist
     if (evidenceChunks.length > 0) {
-      const testRe = /\b(test\s*report|type\s*test|acceptance\s*test|routine\s*test|testing\s*lab|nabl|erda|cpri|test\s*certificate|inspection\s*and\s*test|testing\s*charges|testing\s*agency)\b/i
+      const testRe = /\b(test\s*reports?|type\s*tests?|acceptance\s*tests?|routine\s*tests?|testing\s*lab\w*|nabl|erda|cpri|test\s*certificates?|inspection\s*and\s*test\w*|testing\s*charges|testing\s*agenc\w+|lab\s*reports?)\b/i
       const bisRe = /\b(bis|bureau\s+of\s+indian\s+standards|crs|compulsory\s+registration|is\s*14286|is\s*16221|is\s*9283|is\s*9000|isi\s*mark|almm|is\s*\d{3,5})\b/i
-      const sampleRe = /\b(product\s*sample|sample\s*submission|submission\s*of\s*sample|physical\s*sample|sample\s*testing|sample\s*approval|proto\s*type|dispatch\s*of\s*sample|sample\s*unit|sample\s*cell|sample\s*deposit|courier\s*receipt)\b/i
+      const sampleRe = /\b(product\s*samples?|sample\s*submission|submission\s*of\s*samples?|physical\s*samples?|sample\s*testing|sample\s*approval|proto\s*types?|dispatch\s*of\s*samples?|sample\s*unit|sample\s*cell|sample\s*deposit|courier\s*receipt|samples?\s+(?:shall|should|must|to\s+be))\b/i
       const mafRe = /\b(maf|manufacturer\s*authori[zs]ation|oem\s*authori[zs]ation|authori[zs]ation\s*letter|annexure\s*[a-z0-9]+)\b/i
 
-      const directTest = evidenceChunks.filter(c => testRe.test(c.content)).map(c => `=== [DOCUMENT: "${c.docName}" | PAGE: ${c.pageNumber}] ===\n${c.content.slice(0, 2000)}`).slice(0, 10).join('\n\n')
-      const directBis = evidenceChunks.filter(c => bisRe.test(c.content)).map(c => `=== [DOCUMENT: "${c.docName}" | PAGE: ${c.pageNumber}] ===\n${c.content.slice(0, 2000)}`).slice(0, 10).join('\n\n')
-      const directSample = evidenceChunks.filter(c => sampleRe.test(c.content)).map(c => `=== [DOCUMENT: "${c.docName}" | PAGE: ${c.pageNumber}] ===\n${c.content.slice(0, 2000)}`).slice(0, 10).join('\n\n')
-      const directMaf = evidenceChunks.filter(c => mafRe.test(c.content)).map(c => `=== [DOCUMENT: "${c.docName}" | PAGE: ${c.pageNumber}] ===\n${c.content.slice(0, 2000)}`).slice(0, 10).join('\n\n')
+      const sl = (c: DocumentPageChunk) => {
+        const m = c.content.search(/test\s*reports?|type\s*tests?|\bbis\b|\bcrs\b|samples?\b|\bmaf\b|authori[zs]ation|nabl|erda|cpri/i)
+        const start = Math.max(0, (m < 0 ? 0 : m) - 600)
+        return c.content.slice(start, start + 2600)
+      }
+      const directTest = evidenceChunks.filter(c => testRe.test(c.content)).map(c => `=== [DOCUMENT: "${c.docName}" | PAGE: ${c.pageNumber}] ===\n${sl(c)}`).slice(0, 12).join('\n\n')
+      const directBis = evidenceChunks.filter(c => bisRe.test(c.content)).map(c => `=== [DOCUMENT: "${c.docName}" | PAGE: ${c.pageNumber}] ===\n${sl(c)}`).slice(0, 12).join('\n\n')
+      const directSample = evidenceChunks.filter(c => sampleRe.test(c.content)).map(c => `=== [DOCUMENT: "${c.docName}" | PAGE: ${c.pageNumber}] ===\n${sl(c)}`).slice(0, 12).join('\n\n')
+      const directMaf = evidenceChunks.filter(c => mafRe.test(c.content)).map(c => `=== [DOCUMENT: "${c.docName}" | PAGE: ${c.pageNumber}] ===\n${sl(c)}`).slice(0, 12).join('\n\n')
 
       if (!testReportSnippets || testReportSnippets.length < 100) testReportSnippets = directTest
       else if (directTest) testReportSnippets += `\n\n${directTest}`
@@ -326,6 +331,8 @@ For each document requirement, assign one of the following statuses:
 - CONDITIONAL: The document is required only when a specific condition applies.
 - UNCLEAR: The available evidence is insufficient to determine the requirement.
 - DOCUMENT INCOMPLETE: Relevant pages, annexures, or referenced documents are missing or unreadable.
+
+Checklist rule: if the tender's list of documents to be submitted (checklist / Cover-1 / technical bid envelope) names the document (e.g. "Copy of Test reports", "MAF", "BIS certificate"), that is an explicit submission requirement -> MANDATORY (quote the checklist line and its page). Only use NOT REQUIRED when the passages above contain no mention at all.
 
 Important distinctions:
 - Technical standard mentioned DOES NOT automatically mean a separate certificate must be submitted.
