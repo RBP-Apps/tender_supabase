@@ -184,7 +184,7 @@ export interface DocClauseRule {
 export const DOC_CLAUSE_RULES: DocClauseRule[] = [
   { key: 'bis', name: 'BIS Certificate / Licence', tender: /\bBIS\b.{0,40}(licen[cs]e|certificate|registration)|(licen[cs]e|certificate|registration).{0,40}\bBIS\b/i, bidder: /licen[cs]e\s+(document|no\.?|number)|\bR-\d{6,9}\b|\bBIS\s+(licen[cs]e|registration|certificate)\b|certificate\s+of\s+registration/i },
   { key: 'maf', name: 'Manufacturer Authorization Form (MAF)', tender: /\bMAF\b|manufacturer(?:'s|’s)?\s+authori[sz]ation/i, bidder: /manufacturer.{0,60}authori[sz]|authori[sz]ation\s+(letter|form)|hereby\s+authori[sz]e|\bMAF\s+(no|ref|letter|form)\b/i },
-  { key: 'testreport', name: 'Test Reports', tender: /test\s+reports?/i, bidder: /test\s+report|\bSTC\b.{0,40}report|flash\s+test|IEC\s*61215|IEC\s*61730/i },
+  { key: 'testreport', name: 'Test Reports', tender: /test\s+reports?/i, bidder: /test\s+report\s+(no|number)\b|\btest\s+report\b(?!s?\s+for\s+specific)|flash\s+test|\bSTC\s+test/i },
 ]
 
 const DEMAND = /\b(submit|submitted|enclose[d]?|attach(?:ed)?|upload(?:ed)?|furnish|copy\s+of|certified\s+copy|shall|must|mandatory|compulsory|required)\b/i
