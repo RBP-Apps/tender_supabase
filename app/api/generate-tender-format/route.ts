@@ -4,6 +4,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { COMPANY } from '@/lib/company'
 import { resolveStoredDocBytes } from '@/lib/server-pdf'
+import { buildTenderMap, annexurePages } from '@/lib/tender-map'
 import { extractPdfPageTexts, type PageText } from '@/lib/tender-validation-agent'
 
 export const runtime = 'nodejs'
@@ -97,7 +98,11 @@ export async function POST(request: Request) {
     return NextResponse.json({ success: true, formatFound: false, reason: 'The tender PDF is not available to read the prescribed format.' })
   }
   const pages = await extractPdfPageTexts(resolved.bytes)
-  const candidates = pickFormatPages(pages, docName, clauseRef)
+  // Tender map first: if the item names an annexure the map knows, use exactly its pages.
+  const mapped = annexurePages(buildTenderMap(pages), `${docName} ${clauseRef}`)
+  const candidates = mapped.length
+    ? pages.filter(p => mapped.includes(p.page)).slice(0, 3)
+    : pickFormatPages(pages, docName, clauseRef)
   if (!candidates.length) {
     return NextResponse.json({ success: true, formatFound: false, reason: 'No prescribed format for this item was found in the tender PDF. Upload the actual document instead.' })
   }

@@ -2,6 +2,7 @@ import { generateText, NoObjectGeneratedError, Output } from 'ai'
 import { createOpenAI } from '@ai-sdk/openai'
 import { NextResponse } from 'next/server'
 import { tenderExtractionSchema } from '@/lib/tender-extraction-schema'
+import { buildTenderMap } from '@/lib/tender-map'
 import { extractPdfPageTexts, validateAndFillExtraction, normalizeExtraction } from '@/lib/tender-validation-agent'
 
 export const runtime = 'nodejs'
@@ -78,7 +79,7 @@ export async function POST(request: Request) {
         pages,
         model: openai(process.env.OPENAI_VALIDATION_MODEL || modelName),
       })
-      return NextResponse.json({ data: extraction, validation: report })
+      return NextResponse.json({ data: extraction, validation: report, tenderMap: buildTenderMap(pages) })
     } catch (vErr) {
       console.warn('[extract-tender] validation agent failed, returning pass-1 data:', vErr)
       return NextResponse.json({ data: output, validation: null })
