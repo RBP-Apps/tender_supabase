@@ -66,7 +66,7 @@ function pickFormatPages(pages: PageText[], docName: string, clauseRef: string, 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
 function letterheadHtml(company: typeof COMPANY, bodyHtml: string): string {
-  return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#111">
+  return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#111;max-width:100%;overflow:hidden">
 <table style="width:100%;border-collapse:collapse;border-bottom:2px solid #111;margin-bottom:12px"><tr>
 <td style="width:70px;vertical-align:middle"><img src="${esc(company.logoUrl)}" alt="RBP" style="height:48px"/></td>
 <td style="vertical-align:middle"><div style="font-size:18px;font-weight:bold">${esc(company.name)}</div>
@@ -152,7 +152,7 @@ export async function POST(request: Request) {
       else if (b.kind === 'table' && b.rows?.length) {
         const [head, ...rest] = b.rows
         parts.push(
-          `<table style="width:100%;border-collapse:collapse;margin:8px 0"><thead><tr>${head.cells
+          `<table style="width:100%;max-width:100%;table-layout:fixed;word-break:break-word;border-collapse:collapse;margin:8px 0"><thead><tr>${head.cells
             .map(c => `<th style="border:1px solid #333;padding:4px 6px;background:#f3f3f3;text-align:left">${esc(c)}</th>`)
             .join('')}</tr></thead><tbody>${rest
             .map(r => `<tr>${r.cells.map(c => `<td style="border:1px solid #333;padding:4px 6px">${esc(c)}</td>`).join('')}</tr>`)
