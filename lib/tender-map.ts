@@ -72,7 +72,7 @@ export function buildTenderMap(pages: PageText[]): TenderMap {
       found.get(number)!.pages.push(p.page)
       continue
     }
-    found.set(number, { label: `Annexure-${String(number).padStart(2, '0')}`, number, title: m[2].replace(/\s+/g, ' ').trim(), page: p.page, pages: [p.page] })
+    found.set(number, { label: `Annexure-${String(number).padStart(2, '0')}`, number, title: m[2].replace(/\s+/g, ' ').split(/\s*[\(\[]|\s{2,}|\s+SN\s/)[0].trim().slice(0, 70), page: p.page, pages: [p.page] })
   }
 
   return {
