@@ -86,8 +86,9 @@ export function MasterDocumentDossierModal({
   const [documents, setDocuments] = useState<PortalUploadDocumentItem[]>(() => {
     // Older dossiers stored auto-built "Uploaded" entries that had no real file behind them.
     const isReal = (d: PortalUploadDocumentItem) =>
-      Boolean(d.dataUrl || d.letterContent?.contentHtml) ||
-      /upload|manual|word edit|from stage 0[1-3]/i.test(d.source || '') && !/pending|system generated|verified tender dossier|receipt/i.test(d.source || '')
+      !(d.dataUrl && d.dataUrl === tender.tenderDoc?.dataUrl && d.fieldKey !== 'tenderNotice') &&
+      (Boolean(d.dataUrl || d.letterContent?.contentHtml) ||
+      /upload|manual|word edit|from stage 0[1-3]/i.test(d.source || '') && !/pending|system generated|verified tender dossier|receipt/i.test(d.source || ''))
     return [
       ...(tender.documentReady?.checklistDocs || []),
       ...(tender.portalUpload?.documents || []).filter(
