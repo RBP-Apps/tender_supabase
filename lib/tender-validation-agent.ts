@@ -164,7 +164,7 @@ const recoverySchema = z.object({
 
 const AGENT_SYSTEM =
   'You are a strict validation agent for Indian government tenders. You are given text of selected PDF pages and a list of fields that an earlier pass failed to fill. ' +
-  'Fill a field ONLY if the pages state it. Never guess, never use general knowledge, never invent sample data; otherwise return null / empty. ' +
+  'EMD / earnest money is ONLY the earnest-money amount stated for it (e.g. Rs 5,00,000 = 5 Lakh). Never add the tender/bid document fee or GST to it, even when the tender says both are paid in one NEFT/RTGS transaction. Fill a field ONLY if the pages state it. Never guess, never use general knowledge, never invent sample data; otherwise return null / empty. ' +
   'For every value give the page number and a short VERBATIM quote from that page. Dates -> YYYY-MM-DD. EMD -> Rs. Lakh digits only.'
 
 /**

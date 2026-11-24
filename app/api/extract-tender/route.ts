@@ -16,7 +16,7 @@ const INSTRUCTIONS =
   'You extract structured data from Indian government tender documents (NIT / RfS / RFP / bid documents). ' +
   'Read the entire uploaded tender PDF, including all tables, annexures, eligibility criteria, financial conditions, technical specifications, and corrigenda. ' +
   'Only report values the document actually states; use null (or an empty array) for anything not present. Never guess, invent, or insert sample data. ' +
-  'Convert every date to YYYY-MM-DD. Convert EMD amounts to Rs. Lakh (e.g. Rs. 92,00,000 = 92). Only report beneficiary bank details that belong to the authority (the payee). ' +
+  'EMD / earnest money is ONLY the earnest-money amount stated for it (e.g. Rs 5,00,000 = 5 Lakh). Never add the tender/bid document fee or GST to it, even when the tender says both are paid in one NEFT/RTGS transaction. Convert every date to YYYY-MM-DD. Convert EMD amounts to Rs. Lakh (e.g. Rs. 92,00,000 = 92). Only report beneficiary bank details that belong to the authority (the payee). ' +
   'For GST Section: automatically extract applicable GST rates, GST amounts, and relevant GST conditions for the tender fee and contract with appropriate context. ' +
   'For Tender Fee + GST: calculate Total = Tender Fee + Applicable GST Amount. If the document states fee is inclusive of GST, use that amount without adding GST again. Clearly distinguish base tender fee, GST amount, and total amount. Do not assume a GST rate if not specified in the document. ' +
   'For Test Report Compliance: provide a concise 3-5 line summary of exact test report requirements, standards (IS/IEC), accredited labs (NABL), report validity, and compliance conditions. ' +
