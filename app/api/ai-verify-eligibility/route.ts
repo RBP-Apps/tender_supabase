@@ -429,7 +429,8 @@ Produce the structured eligibility evaluation. List EVERY individual eligibility
 
     // Score is a computed ratio (mandatory criteria verified as passing), not a model guess.
     // If the model flagged none as mandatory, score over every requirement that the tender actually states.
-    const scored = mandatory.length ? mandatory : breakdown.filter((r: any) => r.evidenceSituation !== 'requirement-not-in-tender')
+    // every criterion the tender actually states counts (a verified non-mandatory document must not be ignored)
+    const scored = breakdown.filter((r: any) => r.evidenceSituation !== 'requirement-not-in-tender')
     const scoredPass = scored.filter((r: any) => r.status === 'Pass').length
     const score = scored.length ? Math.round((scoredPass / scored.length) * 100) : 0
     const scoreDetail = `${scoredPass} of ${scored.length} tender requirement(s) verified as met`
