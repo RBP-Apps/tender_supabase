@@ -84,12 +84,16 @@ export function MasterDocumentDossierModal({
 
   // Documents attached to checklist items
   const [documents, setDocuments] = useState<PortalUploadDocumentItem[]>(() => {
+    // Older dossiers stored auto-built "Uploaded" entries that had no real file behind them.
+    const isReal = (d: PortalUploadDocumentItem) =>
+      Boolean(d.dataUrl || d.letterContent?.contentHtml) ||
+      /upload|manual|word edit|from stage 0[1-3]/i.test(d.source || '') && !/pending|system generated|verified tender dossier|receipt/i.test(d.source || '')
     return [
       ...(tender.documentReady?.checklistDocs || []),
       ...(tender.portalUpload?.documents || []).filter(
         pd => !(tender.documentReady?.checklistDocs || []).some(cd => cd.fieldKey === pd.fieldKey)
       ),
-    ]
+    ].filter(isReal)
   })
 
   // Lightbox preview modal state
@@ -177,8 +181,10 @@ export function MasterDocumentDossierModal({
 
         if (!hasDoc) {
           const doc = resolveOrBuildDocForChecklistItem(item, tender, updated)
-          updated.push(doc)
-          changed = true
+          if (doc.status !== 'Pending') {
+            updated.push(doc)
+            changed = true
+          }
         }
       })
 
@@ -943,7 +949,15 @@ Upload the actual document in the earlier stage or in Document Ready.
 
                           {/* Attached Document Card & Action Buttons */}
                           <div className="mt-2.5 flex items-center gap-2 flex-wrap text-xs">
+                            {matchedDoc.status === 'Pending' && (
+                              <div className="flex items-center gap-1.5 bg-amber-50 border border-amber-200 text-amber-900 px-2.5 py-1 rounded-lg">
+                                <span className="font-semibold">Pending upload</span>
+                                <span className="text-[10px] text-amber-700">no file attached yet</span>
+                              </div>
+                            )}
                             {/* Document badge */}
+                            {matchedDoc.status !== 'Pending' && (
+                            <>
                             <div className="flex items-center gap-1.5 bg-emerald-50 border border-emerald-200 text-emerald-900 px-2.5 py-1 rounded-lg">
                               <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 flex-shrink-0" />
                               <span className="font-semibold truncate max-w-[240px]" title={matchedDoc.name}>
@@ -988,6 +1002,8 @@ Upload the actual document in the earlier stage or in Document Ready.
                               <FileEdit className="w-3.5 h-3.5" />
                               <span>Edit Doc</span>
                             </button>
+                            </>
+                            )}
 
                             {!isViewOnly && (
                               <button

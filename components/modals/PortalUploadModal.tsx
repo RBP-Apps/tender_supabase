@@ -136,250 +136,53 @@ export function resolveOrBuildDocForChecklistItem(
   const lowerName = item.docName.toLowerCase()
   const fieldKey = item.matchedFieldKey || `chk_field_${item.id}`
 
-  // 2. Tender notice / NIT / Corrigendum
-  if (
-    lowerName.includes('tender document') ||
-    lowerName.includes('nit') ||
-    lowerName.includes('notice') ||
-    fieldKey === 'tenderNotice'
-  ) {
-    return {
-      id: `portal-${fieldKey}`,
-      fieldKey,
-      fieldLabel: item.docName,
-      name: tender.tenderDoc?.name || `Tender_NIT_Corrigendum_${tender.id}.pdf`,
-      size: tender.tenderDoc?.size || 524288,
-      type: tender.tenderDoc?.type || 'application/pdf',
-      uploadedAt: tender.tenderDoc?.uploadedAt || new Date().toISOString(),
-      dataUrl: tender.tenderDoc?.dataUrl,
-      source: 'From Stage 01/02',
-      status: 'Uploaded',
-    }
-  }
+  // Only a file that really exists in an earlier stage counts as attached. Everything else is a
+  // clearly marked PENDING placeholder - never a made-up "Uploaded" file.
+  const fromStage = (d: { name?: string; size?: number; type?: string; uploadedAt?: string; dataUrl?: string } | null | undefined, source: string): PortalUploadDocumentItem | null =>
+    d && (d.dataUrl || d.name)
+      ? {
+          id: `portal-${fieldKey}`,
+          fieldKey,
+          fieldLabel: item.docName,
+          name: d.name || item.docName,
+          size: d.size,
+          type: d.type || 'application/pdf',
+          uploadedAt: d.uploadedAt || new Date().toISOString(),
+          dataUrl: d.dataUrl,
+          source,
+          status: 'Uploaded',
+        }
+      : null
 
-  // 3. EMD / Tender Fee
-  if (
-    lowerName.includes('emd') ||
-    lowerName.includes('tender fee') ||
-    fieldKey === 'emdProof'
-  ) {
-    return {
-      id: `portal-${fieldKey}`,
-      fieldKey,
-      fieldLabel: item.docName,
-      name: tender.emdReady?.utrNumber
-        ? `EMD_Fee_Receipt_UTR_${tender.emdReady.utrNumber}.pdf`
-        : `EMD_Challan_Fee_Receipt_${tender.id}.pdf`,
-      size: 145000,
-      type: 'application/pdf',
-      uploadedAt: tender.emdReady?.date || new Date().toISOString(),
-      source: tender.emdReady?.utrNumber
-        ? `From Stage 04 (UTR: ${tender.emdReady.utrNumber})`
-        : 'Stage 04 EMD Receipt',
-      status: 'Uploaded',
-    }
-  }
+  const ec = tender.eligibilityCheck
+  const sd = tender.sampleDetails
+  const isEmd = /emd|tender fee|bid document fee/.test(lowerName)
+  const isTenderCopy = !isEmd && /(copy of (the )?(original )?tender|tender document duly|original tender)/.test(lowerName)
+  let real: PortalUploadDocumentItem | null = null
+  if (fieldKey === 'tenderNotice') real = fromStage(tender.tenderDoc, 'From Stage 01/02')
+  else if (isEmd) {
+    const g = tender.emdReady?.generatedDocument
+    real = g?.pdfDataUrl || g?.docxDataUrl
+      ? fromStage({ name: g.pdfDataUrl ? g.pdfFileName : g.docxFileName, dataUrl: g.pdfDataUrl || g.docxDataUrl, uploadedAt: g.generatedAt }, 'From Stage 04 (EMD document)')
+      : null
+  } else if (isTenderCopy) real = null // needs the SIGNED & stamped copy - the raw tender is not that
+  else if (/turnover|net worth|balance sheet|financial/.test(lowerName)) real = fromStage(ec?.turnoverDoc, 'From Stage 02')
+  else if (/experience|work order|completion|past performance/.test(lowerName)) real = fromStage(ec?.experienceDoc, 'From Stage 02')
+  else if (/registration|gst|pan|incorporation/.test(lowerName)) real = fromStage(ec?.vendorRegDoc, 'From Stage 02')
+  else if (/maf|manufacturer.{0,20}authori|oem/.test(lowerName)) real = fromStage(sd?.mafLetter, 'From Stage 03')
+  else if (/test report|lab|nabl/.test(lowerName)) real = fromStage(sd?.testReport, 'From Stage 03')
+  else if (/bis|iso/.test(lowerName)) real = fromStage(sd?.bisCertificate, 'From Stage 03')
+  else if (/sample|datasheet/.test(lowerName)) real = fromStage(sd?.productSample, 'From Stage 03')
+  if (real) return real
 
-  // 4. Turnover / Financial / Net Worth / Balance Sheet
-  if (
-    lowerName.includes('turnover') ||
-    lowerName.includes('financial') ||
-    lowerName.includes('net worth') ||
-    lowerName.includes('balance sheet') ||
-    fieldKey === 'turnover'
-  ) {
-    const tDoc = tender.eligibilityCheck?.turnoverDoc
-    return {
-      id: `portal-${fieldKey}`,
-      fieldKey,
-      fieldLabel: item.docName,
-      name: tDoc?.name || `Annual_Turnover_CA_Certificate_${tender.id}.pdf`,
-      size: tDoc?.size || 184320,
-      type: tDoc?.type || 'application/pdf',
-      uploadedAt: tDoc?.uploadedAt || new Date().toISOString(),
-      dataUrl: tDoc?.dataUrl,
-      source: 'From Stage 03',
-      status: 'Uploaded',
-    }
-  }
-
-  // 5. Experience / Work Order / Completion Certificate
-  if (
-    lowerName.includes('experience') ||
-    lowerName.includes('work order') ||
-    lowerName.includes('completion') ||
-    lowerName.includes('past performance') ||
-    fieldKey === 'experience'
-  ) {
-    const eDoc = tender.eligibilityCheck?.experienceDoc
-    return {
-      id: `portal-${fieldKey}`,
-      fieldKey,
-      fieldLabel: item.docName,
-      name: eDoc?.name || `Work_Experience_Completion_Certificates_${tender.id}.pdf`,
-      size: eDoc?.size || 245760,
-      type: eDoc?.type || 'application/pdf',
-      uploadedAt: eDoc?.uploadedAt || new Date().toISOString(),
-      dataUrl: eDoc?.dataUrl,
-      source: 'From Stage 03',
-      status: 'Uploaded',
-    }
-  }
-
-  // 6. Vendor Registration / GST / PAN / Firm Registration
-  if (
-    lowerName.includes('registration') ||
-    lowerName.includes('gst') ||
-    lowerName.includes('pan') ||
-    lowerName.includes('incorporation') ||
-    lowerName.includes('firm') ||
-    fieldKey === 'vendorReg'
-  ) {
-    const vDoc = tender.eligibilityCheck?.vendorRegDoc
-    return {
-      id: `portal-${fieldKey}`,
-      fieldKey,
-      fieldLabel: item.docName,
-      name: vDoc?.name || `Firm_Vendor_Registration_GST_PAN_${tender.id}.pdf`,
-      size: vDoc?.size || 192000,
-      type: vDoc?.type || 'application/pdf',
-      uploadedAt: vDoc?.uploadedAt || new Date().toISOString(),
-      dataUrl: vDoc?.dataUrl,
-      source: 'From Stage 03',
-      status: 'Uploaded',
-    }
-  }
-
-  // 7. MAF Letter / OEM Authorization
-  if (
-    lowerName.includes('maf') ||
-    lowerName.includes('manufacturer authorization') ||
-    lowerName.includes('oem') ||
-    fieldKey === 'mafLetter'
-  ) {
-    const mDoc = tender.sampleDetails?.mafLetter
-    return {
-      id: `portal-${fieldKey}`,
-      fieldKey,
-      fieldLabel: item.docName,
-      name: mDoc?.name || `OEM_Manufacturer_Authorization_Form_MAF_${tender.id}.pdf`,
-      size: mDoc?.size || 122880,
-      type: mDoc?.type || 'application/pdf',
-      uploadedAt: mDoc?.uploadedAt || new Date().toISOString(),
-      dataUrl: mDoc?.dataUrl,
-      source: 'From Stage 04',
-      status: 'Uploaded',
-    }
-  }
-
-  // 8. Test Report / Lab inspection
-  if (
-    lowerName.includes('test report') ||
-    lowerName.includes('lab') ||
-    lowerName.includes('nabl') ||
-    lowerName.includes('inspection report') ||
-    fieldKey === 'testReport'
-  ) {
-    const trDoc = tender.sampleDetails?.testReport
-    return {
-      id: `portal-${fieldKey}`,
-      fieldKey,
-      fieldLabel: item.docName,
-      name: trDoc?.name || `NABL_Laboratory_Test_Report_${tender.id}.pdf`,
-      size: trDoc?.size || 310000,
-      type: trDoc?.type || 'application/pdf',
-      uploadedAt: trDoc?.uploadedAt || new Date().toISOString(),
-      dataUrl: trDoc?.dataUrl,
-      source: 'From Stage 04',
-      status: 'Uploaded',
-    }
-  }
-
-  // 9. BIS / ISO Certificate
-  if (
-    lowerName.includes('bis') ||
-    lowerName.includes('iso') ||
-    lowerName.includes('standard') ||
-    fieldKey === 'bisCertificate'
-  ) {
-    const bisDoc = tender.sampleDetails?.bisCertificate
-    return {
-      id: `portal-${fieldKey}`,
-      fieldKey,
-      fieldLabel: item.docName,
-      name: bisDoc?.name || `BIS_ISO_Standard_Certificate_${tender.id}.pdf`,
-      size: bisDoc?.size || 164000,
-      type: bisDoc?.type || 'application/pdf',
-      uploadedAt: bisDoc?.uploadedAt || new Date().toISOString(),
-      dataUrl: bisDoc?.dataUrl,
-      source: 'From Stage 04',
-      status: 'Uploaded',
-    }
-  }
-
-  // 10. Product Sample / Datasheet
-  if (
-    lowerName.includes('sample') ||
-    lowerName.includes('datasheet') ||
-    lowerName.includes('specification') ||
-    fieldKey === 'productSample'
-  ) {
-    const psDoc = tender.sampleDetails?.productSample
-    return {
-      id: `portal-${fieldKey}`,
-      fieldKey,
-      fieldLabel: item.docName,
-      name: psDoc?.name || `Technical_Datasheet_Specification_Compliance_${tender.id}.pdf`,
-      size: psDoc?.size || 215000,
-      type: psDoc?.type || 'application/pdf',
-      uploadedAt: psDoc?.uploadedAt || new Date().toISOString(),
-      dataUrl: psDoc?.dataUrl,
-      source: 'From Stage 04',
-      status: 'Uploaded',
-    }
-  }
-
-  // 11. Signed Bid Submission Packet / Formats / Annexures
-  if (
-    lowerName.includes('annexure') ||
-    lowerName.includes('format') ||
-    lowerName.includes('packet') ||
-    lowerName.includes('undertaking') ||
-    lowerName.includes('declaration') ||
-    fieldKey === 'bidAnnexures'
-  ) {
-    const safeBase = item.docName
-      .replace(/^\d+[\.\)]\s*/, '')
-      .replace(/[^a-zA-Z0-9_\-]/g, '_')
-      .slice(0, 45)
-    return {
-      id: `portal-${fieldKey}`,
-      fieldKey,
-      fieldLabel: item.docName,
-      name: `${safeBase}_Signed_${tender.id}.pdf`,
-      size: 198000,
-      type: 'application/pdf',
-      uploadedAt: new Date().toISOString(),
-      source: 'System Generated Set',
-      status: 'Uploaded',
-    }
-  }
-
-  // 12. Default clean compliance document
-  const safeBaseName = item.docName
-    .replace(/^\d+[\.\)]\s*/, '')
-    .replace(/[^a-zA-Z0-9_\-]/g, '_')
-    .slice(0, 45)
   return {
     id: `portal-${fieldKey}`,
     fieldKey,
     fieldLabel: item.docName,
-    name: `${safeBaseName}_${tender.id}.pdf`,
-    size: 156000,
-    type: 'application/pdf',
+    name: 'Not uploaded yet',
     uploadedAt: new Date().toISOString(),
-    source: 'Verified Tender Dossier',
-    status: 'Uploaded',
+    source: 'Pending upload',
+    status: 'Pending',
   }
 }
 
@@ -792,8 +595,10 @@ Tender Operations Department
             tender,
             updated
           )
-          updated.push(doc)
-          changed = true
+          if (doc.status !== 'Pending') {
+            updated.push(doc)
+            changed = true
+          }
         }
       })
 
