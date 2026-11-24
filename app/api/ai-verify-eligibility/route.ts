@@ -420,6 +420,22 @@ Produce the structured eligibility evaluation. List EVERY individual eligibility
       for (const rule of DOC_CLAUSE_RULES) {
         const coveredRows = breakdown.filter((r: any) => rule.tender.test(`${r.criteriaName || ''} ${r.tenderRequirement || ''}`))
         if (coveredRows.length) {
+          // A "Pass" for a single-document row must be backed by text of the cited file that really shows that document.
+          for (const r of coveredRows as any[]) {
+            if (r.status !== 'Pass') continue
+            const label = `${r.criteriaName || ''} ${r.tenderRequirement || ''}`
+            if (DOC_CLAUSE_RULES.filter(x => x.tender.test(label)).length !== 1) continue
+            const citedName = String(r.userSubmitted || '').replace(/,\s*Page.*$/i, '').trim()
+            const citedChunks = bidderChunks.filter(c => c.docName === citedName)
+            if (!citedChunks.length || citedChunks.some(c => rule.bidder.test(c.content))) continue
+            r.status = 'Fail'
+            r.evidenceSituation = 'document-not-uploaded'
+            r.userSubmitted = 'Not uploaded'
+            r.bidderSourceQuote = ''
+            r.bidderQuoteVerified = false
+            r.rejectionReason = `The cited file "${citedName}" does not contain a ${rule.name}`
+            r.comparisonResult = `No uploaded document contains a ${rule.name} (the file cited by the model does not show one).`
+          }
           // The model said "not uploaded" although an uploaded file visibly contains this document -> correct it.
           const hit0 = bidderChunks.find(c => rule.bidder.test(c.content))
           for (const r of coveredRows as any[]) {
